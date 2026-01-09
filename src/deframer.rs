@@ -84,51 +84,57 @@ impl Deframer {
         let peek_unpack = unpack(data);
         let mut header: Option<Header> = None;
         let mut payload: Option<Vec<u8>> = None;
-        let mut pdu_quality = 0;
         let mut encodings: Option<Vec<String>> = None;
+        let mut pdu_quality = 0;
 
-        if let Ok((h, _)) = &peek_unpack {
+        // Phase 1: Direct lookup if header is readable and we have an announcement
+        if let Ok((h, p)) = &peek_unpack {
             let src_callsign = h.src_callsign.clone();
             let msg_id = h.original_message_id.or(h.message_id);
             
             if let Some(mid) = msg_id {
-                if let Some(ann_encs) = self.announcements.get(&(src_callsign.clone(), mid)) {
+                let key = (src_callsign.clone(), mid);
+                if let Some(ann_encs) = self.announcements.get(&key) {
                     if let Ok((recovered_data, quality)) = self.strip_post_boundary(data, ann_encs) {
-                        if let Ok((h2, p2)) = unpack(&recovered_data) {
-                           header = Some(h2);
-                           payload = Some(p2);
-                           pdu_quality = quality;
-                           encodings = Some(ann_encs.clone());
-                        }
-                    }
-                } else if let Some(ce) = &h.content_encoding {
-                    let ce_list = ce_to_list(ce);
-                    if let Ok((recovered_data, quality)) = self.strip_post_boundary(data, &ce_list) {
                         if let Ok((h2, p2)) = unpack(&recovered_data) {
                             header = Some(h2);
                             payload = Some(p2);
                             pdu_quality = quality;
-                            encodings = Some(ce_list);
+                            encodings = Some(ann_encs.clone());
                         }
+                    }
+                } else if let Some(ce) = &h.content_encoding {
+                    // No announcement, but header has encodings list
+                    let ice = ce_to_list(ce);
+                    if let Ok((recovered_data, quality)) = self.strip_post_boundary(data, &ice) {
+                        if let Ok((h2, p2)) = unpack(&recovered_data) {
+                            header = Some(h2);
+                            payload = Some(p2);
+                            pdu_quality = quality;
+                            encodings = Some(ice);
+                        }
+                    } else {
+                        // strip_post_boundary failed, but maybe the raw payload is okay?
+                        header = Some(h.clone());
+                        payload = Some(p.clone());
+                        encodings = Some(ice);
+                        pdu_quality = 0;
                     }
                 }
             }
         }
 
+        // Phase 2: Heuristic Loop through ALL announcements if still not recovered
         if header.is_none() || payload.is_none() {
             for ann_encs in self.announcements.values() {
-                let mut try_data = Vec::new();
-                let is_rq_post = ann_encs.iter().position(|e| e == "h" || e == "-1")
-                    .map(|pos| ann_encs[pos+1..].iter().any(|e| RQ_RE.is_match(e)))
-                    .unwrap_or(false);
-
+                // Try to strip this announcement's encodings
+                let is_rq_post = self.raptorq_is_post_boundary(ann_encs);
+                
                 if is_rq_post {
-                    for prev in &self.not_yet_decoded {
-                        try_data.push(prev.clone());
-                    }
-                    try_data.push(data.to_vec());
+                    let mut try_packets = self.not_yet_decoded.clone();
+                    try_packets.push(data.to_vec());
                     
-                    if let Ok((recovered_data, quality)) = self.strip_post_boundary_multi(&try_data, ann_encs) {
+                    if let Ok((recovered_data, quality)) = self.strip_post_boundary_multi(&try_packets, ann_encs) {
                         if let Ok((mut h2, p2)) = unpack(&recovered_data) {
                             // Strip the post-boundary encodings we just applied from the header
                             if let Some(ce) = &mut h2.content_encoding {
@@ -268,6 +274,14 @@ impl Deframer {
             (encs[..pos].to_vec(), encs[pos+1..].to_vec(), true)
         } else {
             (encs.to_vec(), Vec::new(), false)
+        }
+    }
+
+    fn raptorq_is_post_boundary(&self, encs: &[String]) -> bool {
+        if let Some(pos) = encs.iter().position(|e| e == "h" || e == "-1") {
+            encs[pos+1..].iter().any(|e| RQ_RE.is_match(e))
+        } else {
+            false
         }
     }
 

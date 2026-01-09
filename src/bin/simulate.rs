@@ -179,15 +179,34 @@ impl SimulationMetrics {
 }
 
 fn parse_encodings(s: &str) -> Vec<EncValue> {
-    s.split(',')
-        .map(|item| {
-            if let Ok(i) = item.parse::<i8>() {
-                EncValue::Integer(i)
-            } else {
-                EncValue::String(item.to_string())
+    let mut results = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    
+    for c in s.chars() {
+        if c == ',' && depth == 0 {
+            if !current.is_empty() {
+                results.push(parse_single_enc(&current));
+                current.clear();
             }
-        })
-        .collect()
+        } else {
+            if c == '(' { depth += 1; }
+            if c == ')' { depth -= 1; }
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        results.push(parse_single_enc(&current));
+    }
+    results
+}
+
+fn parse_single_enc(s: &str) -> EncValue {
+    if let Ok(i) = s.parse::<i8>() {
+        EncValue::Integer(i)
+    } else {
+        EncValue::String(s.to_string())
+    }
 }
 
 fn main() -> Result<()> {

@@ -23,7 +23,7 @@ struct Args {
     encodings: Option<String>,
 
     #[arg(long, help = "Comma-separated list of announcement encodings")]
-    announcement_encodings: Option<String>,
+    ann_encodings: Option<String>,
 
     #[arg(long, help = "Maximum payload size for chunking")]
     max_payload_size: Option<usize>,
@@ -65,22 +65,41 @@ fn encode_kiss_frame(pdu: &[u8]) -> Vec<u8> {
 }
 
 fn parse_encodings(s: &str) -> Vec<EncValue> {
-    s.split(',')
-        .map(|item| {
-            if let Ok(i) = item.parse::<i8>() {
-                EncValue::Integer(i)
-            } else {
-                EncValue::String(item.to_string())
+    let mut results = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    
+    for c in s.chars() {
+        if c == ',' && depth == 0 {
+            if !current.is_empty() {
+                results.push(parse_single_enc(&current));
+                current.clear();
             }
-        })
-        .collect()
+        } else {
+            if c == '(' { depth += 1; }
+            if c == ')' { depth -= 1; }
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        results.push(parse_single_enc(&current));
+    }
+    results
+}
+
+fn parse_single_enc(s: &str) -> EncValue {
+    if let Ok(i) = s.parse::<i8>() {
+        EncValue::Integer(i)
+    } else {
+        EncValue::String(s.to_string())
+    }
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     
     let encodings = args.encodings.as_ref().map(|s| parse_encodings(s));
-    let ann_encodings = args.announcement_encodings.as_ref().map(|s| parse_encodings(s));
+    let ann_encodings = args.ann_encodings.as_ref().map(|s| parse_encodings(s));
     
     let mut f = File::open(&args.filepath).context("Failed to open input file")?;
     let mut data = Vec::new();

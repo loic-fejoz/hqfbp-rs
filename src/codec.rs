@@ -107,37 +107,81 @@ pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
 }
 
 pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
-    let encoder = RSEncoder::new(n - k);
+    if n > 255 || k == 0 || k > n {
+        bail!("Invalid RS parameters: n={}, k={}", n, k);
+    }
+    let ecc_len = n - k;
+    let encoder = RSEncoder::new(ecc_len);
     let mut encoded = Vec::with_capacity((data.len() + k - 1) / k * n);
     
     for chunk in data.chunks(k) {
-        let mut block = chunk.to_vec();
-        if block.len() < k {
-            block.resize(k, 0);
-        }
-        let ecc = encoder.encode(&block);
-        encoded.extend_from_slice(&block);
-        encoded.extend_from_slice(&ecc);
+        // Shortened block: we pad with zeros at the beginning for the library
+        // but we only transmit the actual data + parity.
+        let internal_pad = k - chunk.len();
+        let mut block_for_lib = vec![0u8; internal_pad];
+        block_for_lib.extend_from_slice(chunk);
+        
+        // Now wrap to 255 for the library
+        let lib_pad = 255 - n;
+        let mut full_codeword_for_lib = vec![0u8; lib_pad];
+        full_codeword_for_lib.extend_from_slice(&block_for_lib);
+        
+        let encoded_full_codeword = encoder.encode(&full_codeword_for_lib);
+        
+        // The parity is the last ecc_len bytes
+        let parity = &encoded_full_codeword[255 - ecc_len..];
+        encoded.extend_from_slice(chunk);
+        encoded.extend_from_slice(parity);
     }
     Ok(encoded)
 }
 
 pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
+    if n > 255 || k == 0 || k > n {
+        bail!("Invalid RS parameters: n={}, k={}", n, k);
+    }
     if data.len() % n != 0 {
         bail!("RS data length must be a multiple of n");
     }
-    let decoder = RSDecoder::new(n - k);
+    let ecc_len = n - k;
+    let decoder = RSDecoder::new(ecc_len);
     let mut decoded = Vec::with_capacity(data.len() / n * k);
     let mut total_corrected = 0;
 
-    for chunk in data.chunks(n) {
-        let mut block = chunk[..k].to_vec();
-        let ecc = &chunk[k..];
+    // We process in blocks. Each block is 'n' bytes, except possibly the last one.
+    // However, in our protocol, normally each packet is a single block or multiple full blocks.
+    // If it's the result of rs_encode on a short data chunk, it will be (data_len + ecc_len) bytes.
+    let mut i = 0;
+    while i < data.len() {
+        let remaining = data.len() - i;
+        let block_len = if remaining >= n { n } else { remaining };
+        let chunk = &data[i..i + block_len];
+        i += block_len;
+
+        // ecc_len is fixed for a given (n,k) pair.
+        if block_len <= ecc_len {
+            bail!("RS block too short to contain parity");
+        }
+        let data_part_len = block_len - ecc_len;
         
-        match decoder.correct(&mut block, Some(ecc)) {
-            Ok(corrected) => {
-                decoded.extend_from_slice(&block);
-                total_corrected += corrected.len();
+        // To decode, we reconstruct the 255-byte codeword.
+        // Codeword = [Lib Pad (255-n) zeros] [Internal Pad (n-block_len) zeros] [Received Data] [Received Parity]
+        let lib_pad = 255 - n;
+        let internal_pad = n - block_len;
+        let mut full_codeword = vec![0u8; lib_pad + internal_pad];
+        full_codeword.extend_from_slice(chunk);
+        
+        if full_codeword.len() != 255 {
+            bail!("Internal error: RS codeword length is {}, expected 255", full_codeword.len());
+        }
+
+        // Use correct_err_count on the full block.
+        match decoder.correct_err_count(&full_codeword, None) {
+            Ok((corrected, err_count)) => {
+                // The corrected data is at index (lib_pad + internal_pad) .. (lib_pad + internal_pad + data_part_len)
+                let start = lib_pad + internal_pad;
+                decoded.extend_from_slice(&corrected[start..start + data_part_len]);
+                total_corrected += err_count;
             }
             Err(_) => bail!("Reed-Solomon decoding failed"),
         }
@@ -189,11 +233,7 @@ pub fn conv_encode(data: &[u8], k: usize, rate: &str) -> Result<Vec<u8>> {
     }
     
     for bit in input_bits {
-        state = ((state << 1) | bit) & 0x7F; // keep 7 bits for G1, G2
-        // NASA polynomials G1=133, G2=171 octal
-        // Constraint length 7 means state has 7 bits.
-        // Python code uses `state &= 0x3F` at the END, so it keeps 6 bits of memory.
-        // It shifts in the new bit at the START.
+        state = ((state << 1) | bit) & 0x7F;
         
         let mut p1 = 0u8;
         let mut p2 = 0u8;
@@ -207,7 +247,7 @@ pub fn conv_encode(data: &[u8], k: usize, rate: &str) -> Result<Vec<u8>> {
         }
         bits.push(p1);
         bits.push(p2);
-        state &= 0x3F; // Keep 6 bits for next iteration
+        state &= 0x3F;
     }
     
     let mut res = Vec::with_capacity((bits.len() + 7) / 8);
@@ -228,7 +268,7 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     
     let g1 = 0o133u8;
     let g2 = 0o171u8;
-    let num_states = 1 << (k - 1); // 64
+    let num_states = 1 << (k - 1);
     
     let mut transitions = vec![[(0usize, 0u8, 0u8); 2]; num_states];
     for s in 0..num_states {
