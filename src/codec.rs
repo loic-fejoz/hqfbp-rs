@@ -128,16 +128,16 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
     }
     let decoder = RSDecoder::new(n - k);
     let mut decoded = Vec::with_capacity(data.len() / n * k);
-    let total_corrected = 0;
+    let mut total_corrected = 0;
 
     for chunk in data.chunks(n) {
         let mut block = chunk[..k].to_vec();
         let ecc = &chunk[k..];
         
         match decoder.correct(&mut block, Some(ecc)) {
-            Ok(_) => {
+            Ok(corrected) => {
                 decoded.extend_from_slice(&block);
-                // total_corrected += corrected; // Buffer doesn't easily give count
+                total_corrected += corrected.len();
             }
             Err(_) => bail!("Reed-Solomon decoding failed"),
         }

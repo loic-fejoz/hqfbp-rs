@@ -175,6 +175,13 @@ impl Deframer {
             return;
         };
         let Some(payload) = payload else { return; };
+        
+        let msg_id_opt = header.original_message_id.or(header.message_id);
+        let Some(orig_msg_id) = msg_id_opt else {
+            self.not_yet_decoded.push(data.to_vec());
+            return;
+        };
+
         let src_callsign = header.src_callsign.clone();
 
         if let Some(ct) = &header.content_type {
@@ -197,7 +204,6 @@ impl Deframer {
 
         self.events.push_back(Event::PDU(PDUEvent { header: header.clone(), payload: payload.clone() }));
 
-        let orig_msg_id = header.original_message_id.or(header.message_id).unwrap();
         let session_key = (src_callsign.clone(), orig_msg_id);
         let total_chunks = header.total_chunks.unwrap_or(1);
         let chunk_id = header.chunk_id.unwrap_or(0);

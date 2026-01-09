@@ -216,7 +216,6 @@ pub fn unpack(data: &[u8]) -> Result<(Header, Vec<u8>)> {
     let header: Header = match decoder.decode() {
         Ok(h) => h,
         Err(e) => {
-            println!("DEBUG: CBOR decode error: {:?} at pos {}", e, decoder.position());
             bail!("Header decode failed: {}", e);
         }
     };
