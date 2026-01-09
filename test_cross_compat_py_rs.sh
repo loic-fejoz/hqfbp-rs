@@ -6,6 +6,7 @@ KISS_FILE="output_py_rs.kiss"
 OUTPUT_DIR="unpacked_output_py_rs"
 FILE_SIZE=10240
 ENCODINGS=${1:-"gzip,h,crc32"}
+ANN_ENCODINGS=${2:-""}
 
 echo "Cleaning up..."
 rm -f "$INPUT_FILE" "$KISS_FILE"
@@ -14,12 +15,13 @@ rm -rf "$OUTPUT_DIR"
 echo "Generating random payload..."
 dd if=/dev/urandom of="$INPUT_FILE" bs=1 count="$FILE_SIZE" status=none
 
-echo "Packing with Python pack (encodings: $ENCODINGS)..."
+echo "Packing with Python pack (encodings: $ENCODINGS, ann_encodings: $ANN_ENCODINGS)..."
 cd ../py-hqfbp
-uv run python src/hqfbp/pack.py "../hqfbp-rs/$INPUT_FILE" 0.0.0.0 0 \
-    --src-callsign "TEST-PY-RS" \
-    --encodings "$ENCODINGS" \
-    --output "../hqfbp-rs/$KISS_FILE"
+CMD="uv run python src/hqfbp/pack.py ../hqfbp-rs/$INPUT_FILE 0.0.0.0 0 --src-callsign TEST-PY-RS --encodings $ENCODINGS --output ../hqfbp-rs/$KISS_FILE"
+if [ ! -z "$ANN_ENCODINGS" ]; then
+    CMD="$CMD --announcement-encodings $ANN_ENCODINGS"
+fi
+$CMD
 cd ../hqfbp-rs
 
 echo "Unpacking with Rust unpack..."
