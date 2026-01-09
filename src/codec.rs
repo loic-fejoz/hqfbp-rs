@@ -60,15 +60,15 @@ pub fn brotli_decompress(data: &[u8]) -> Result<Vec<u8>> {
 
 pub fn lzma_compress(data: &[u8]) -> Result<Vec<u8>> {
     let mut res = Vec::new();
-    lzma_rs::lzma_compress(&mut Cursor::new(data), &mut res)
-        .map_err(|e| anyhow!("LZMA compress failed: {}", e))?;
+    lzma_rs::xz_compress(&mut Cursor::new(data), &mut res)
+        .map_err(|e| anyhow!("XZ compress failed: {}", e))?;
     Ok(res)
 }
 
 pub fn lzma_decompress(data: &[u8]) -> Result<Vec<u8>> {
     let mut res = Vec::new();
-    lzma_rs::lzma_decompress(&mut Cursor::new(data), &mut res)
-        .map_err(|e| anyhow!("LZMA decompress failed: {}", e))?;
+    lzma_rs::xz_decompress(&mut Cursor::new(data), &mut res)
+        .map_err(|e| anyhow!("XZ decompress failed: {}", e))?;
     Ok(res)
 }
 

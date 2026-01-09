@@ -5,6 +5,7 @@ INPUT_FILE="test_payload_rs_py.bin"
 KISS_FILE="output_rs_py.kiss"
 OUTPUT_DIR="unpacked_output_rs_py"
 FILE_SIZE=10240
+ENCODINGS=${1:-"gzip,h,crc32"}
 
 echo "Cleaning up..."
 rm -f "$INPUT_FILE" "$KISS_FILE"
@@ -13,10 +14,10 @@ rm -rf "$OUTPUT_DIR"
 echo "Generating random payload..."
 dd if=/dev/urandom of="$INPUT_FILE" bs=1 count="$FILE_SIZE" status=none
 
-echo "Packing with Rust pack..."
+echo "Packing with Rust pack (encodings: $ENCODINGS)..."
 cargo run --bin pack -- "$INPUT_FILE" 0.0.0.0 0 \
     --src-callsign "TEST-RS-PY" \
-    --encodings "gzip,h,crc32" \
+    --encodings "$ENCODINGS" \
     --output "$KISS_FILE"
 
 echo "Unpacking with Python unpack..."
