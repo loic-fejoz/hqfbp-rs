@@ -1,5 +1,5 @@
 use hqfbp_rs::generator::{PDUGenerator};
-use hqfbp_rs::{Header, unpack, ContentEncoding};
+use hqfbp_rs::{Header, unpack, ContentEncoding, MediaType};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::io::Write;
@@ -16,7 +16,7 @@ fn test_generator_single_pdu() {
     );
     let data = b"Hello World";
     
-    let pdus = generator.generate(data, Some("text/plain;charset=utf-8".to_string())).expect("Generate failed");
+    let pdus = generator.generate(data, Some(MediaType::Type("text/plain;charset=utf-8".to_string()))).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
     let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
@@ -66,7 +66,7 @@ fn test_generator_single_gzip_pdu() {
     );
     let data = b"Hello World";
     
-    let pdus = generator.generate(data, Some("text/plain;charset=utf-8".to_string())).expect("Generate failed");
+    let pdus = generator.generate(data, Some(MediaType::Type("text/plain;charset=utf-8".to_string()))).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
     let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");

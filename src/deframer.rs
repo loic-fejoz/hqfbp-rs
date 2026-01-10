@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use std::collections::{HashMap, VecDeque};
-use crate::{Header, unpack, ContentEncoding, EncodingList};
+use crate::{Header, unpack, ContentEncoding, EncodingList, MediaType};
 use crate::codec::*;
 // Regexes moved to lib.rs
 
@@ -73,7 +73,7 @@ impl Deframer {
         // Phase 0: Fast path for announcements
         if let Ok((h, _p)) = &peek_unpack {
             // Phase 0: Fast path for announcements
-            if h.content_type.as_deref() == Some("application/vnd.hqfbp+cbor") {
+            if h.media_type() == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())) || h.media_type() == Some(MediaType::Format(60)) {
                 let ce_list = h.content_encoding.as_ref().map(ce_to_list).unwrap_or_default();
                 let (pre, post, has_h) = self.split_encs(&ce_list);
                 let pdu_level = if has_h { &post } else { &ce_list };
@@ -96,7 +96,7 @@ impl Deframer {
 
         // Phase 1: Direct lookup if header is readable and we have an announcement
         if let Ok((h, p)) = &peek_unpack {
-            if h.content_type.as_deref() == Some("application/vnd.hqfbp+cbor") {
+            if h.media_type() == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())) || h.media_type() == Some(MediaType::Format(60)) {
                 header = Some(h.clone());
                 payload = Some(p.clone());
                 if let Some(ce) = &h.content_encoding {

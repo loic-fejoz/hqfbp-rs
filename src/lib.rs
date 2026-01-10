@@ -8,22 +8,122 @@ pub mod codec;
 pub mod generator;
 pub mod deframer;
 
-#[derive(Debug, Default, Clone, Encode, Decode)]
-#[cbor(map)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum MediaType {
+    Format(u16),
+    Type(String),
+}
+
+impl MediaType {
+    pub fn to_mime(&self) -> String {
+        match self {
+            MediaType::Format(id) => rev_coap_content_formats().get(id).map(|s| s.to_string()).unwrap_or_else(|| format!("application/x-coap-{}", id)),
+            MediaType::Type(s) => s.clone(),
+        }
+    }
+
+    pub fn canonicalize(self) -> Self {
+        match self {
+            MediaType::Type(s) => {
+                if let Some(id) = get_coap_id(&s) {
+                    MediaType::Format(id)
+                } else {
+                    MediaType::Type(s)
+                }
+            }
+            other => other,
+        }
+    }
+}
+
+impl std::fmt::Display for MediaType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_mime())
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Header {
-    #[n(0)] pub message_id: Option<u32>,
-    #[n(1)] pub src_callsign: Option<String>,
-    #[n(2)] pub dst_callsign: Option<String>,
-    #[n(3)] pub content_format: Option<u16>,
-    #[n(4)] pub content_type: Option<String>,
-    #[n(5)] pub content_encoding: Option<EncodingList>,
-    #[n(6)] pub repr_digest: Option<Vec<u8>>,
-    #[n(7)] pub content_digest: Option<Vec<u8>>,
-    #[n(8)] pub file_size: Option<u64>,
-    #[n(9)] pub chunk_id: Option<u32>,
-    #[n(10)] pub original_message_id: Option<u32>,
-    #[n(11)] pub total_chunks: Option<u32>,
-    #[n(12)] pub payload_size: Option<u64>,
+    pub message_id: Option<u32>,
+    pub src_callsign: Option<String>,
+    pub dst_callsign: Option<String>,
+    pub content_format: Option<u16>,
+    pub content_type: Option<String>,
+    pub content_encoding: Option<EncodingList>,
+    pub repr_digest: Option<Vec<u8>>,
+    pub content_digest: Option<Vec<u8>>,
+    pub file_size: Option<u64>,
+    pub chunk_id: Option<u32>,
+    pub original_message_id: Option<u32>,
+    pub total_chunks: Option<u32>,
+    pub payload_size: Option<u64>,
+}
+
+impl<'b, C> Decode<'b, C> for Header {
+    fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
+        let mut h = Header::default();
+        let len = d.map()?.unwrap_or(0);
+        for _ in 0..len {
+            let key = d.u8()?;
+            match key {
+                0 => h.message_id = Some(d.u32()?),
+                1 => h.src_callsign = Some(d.str()?.to_string()),
+                2 => h.dst_callsign = Some(d.str()?.to_string()),
+                3 => h.content_format = Some(d.u16()?),
+                4 => h.content_type = Some(d.str()?.to_string()),
+                5 => h.content_encoding = Some(d.decode()?),
+                6 => h.repr_digest = Some(d.bytes()?.to_vec()),
+                7 => h.content_digest = Some(d.bytes()?.to_vec()),
+                8 => h.file_size = Some(d.u64()?),
+                9 => h.chunk_id = Some(d.u32()?),
+                10 => h.original_message_id = Some(d.u32()?),
+                11 => h.total_chunks = Some(d.u32()?),
+                12 => h.payload_size = Some(d.u64()?),
+                _ => { d.skip()?; }
+            }
+        }
+        Ok(h)
+    }
+}
+
+impl<C> Encode<C> for Header {
+    fn encode<W: minicbor::encode::Write>(&self, e: &mut Encoder<W>, _ctx: &mut C) -> Result<(), minicbor::encode::Error<W::Error>> {
+        let mut fields = Vec::new();
+        if self.message_id.is_some() { fields.push(0); }
+        if self.src_callsign.is_some() { fields.push(1); }
+        if self.dst_callsign.is_some() { fields.push(2); }
+        if self.content_format.is_some() { fields.push(3); }
+        if self.content_type.is_some() { fields.push(4); }
+        if self.content_encoding.is_some() { fields.push(5); }
+        if self.repr_digest.is_some() { fields.push(6); }
+        if self.content_digest.is_some() { fields.push(7); }
+        if self.file_size.is_some() { fields.push(8); }
+        if self.chunk_id.is_some() { fields.push(9); }
+        if self.original_message_id.is_some() { fields.push(10); }
+        if self.total_chunks.is_some() { fields.push(11); }
+        if self.payload_size.is_some() { fields.push(12); }
+
+        e.map(fields.len() as u64)?;
+        for key in fields {
+            match key {
+                0 => { e.u8(0)?.u32(self.message_id.unwrap())?; }
+                1 => { e.u8(1)?.str(self.src_callsign.as_ref().unwrap())?; }
+                2 => { e.u8(2)?.str(self.dst_callsign.as_ref().unwrap())?; }
+                3 => { e.u8(3)?.u16(self.content_format.unwrap())?; }
+                4 => { e.u8(4)?.str(self.content_type.as_ref().unwrap())?; }
+                5 => { e.u8(5)?.encode(self.content_encoding.as_ref().unwrap())?; }
+                6 => { e.u8(6)?.bytes(self.repr_digest.as_ref().unwrap())?; }
+                7 => { e.u8(7)?.bytes(self.content_digest.as_ref().unwrap())?; }
+                8 => { e.u8(8)?.u64(self.file_size.unwrap())?; }
+                9 => { e.u8(9)?.u32(self.chunk_id.unwrap())?; }
+                10 => { e.u8(10)?.u32(self.original_message_id.unwrap())?; }
+                11 => { e.u8(11)?.u32(self.total_chunks.unwrap())?; }
+                12 => { e.u8(12)?.u64(self.payload_size.unwrap())?; }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Header {
@@ -62,19 +162,41 @@ impl Header {
         self.total_chunks = None;
     }
 
+    pub fn media_type(&self) -> Option<MediaType> {
+        if let Some(f) = self.content_format {
+            Some(MediaType::Format(f))
+        } else {
+            self.content_type.as_ref().map(|s| MediaType::Type(s.clone()))
+        }
+    }
+
+    pub fn set_media_type(&mut self, mt: Option<MediaType>) {
+        if let Some(m) = mt {
+            match m.canonicalize() {
+                MediaType::Format(f) => {
+                    self.content_format = Some(f);
+                    self.content_type = None;
+                }
+                MediaType::Type(s) => {
+                    self.content_format = None;
+                    self.content_type = Some(s);
+                }
+            }
+        } else {
+            self.content_format = None;
+            self.content_type = None;
+        }
+    }
+
     pub fn into_human_readable(self) -> HashMap<String, serde_json::Value> {
         let mut m = HashMap::new();
-        if let Some(v) = self.message_id { m.insert("Message-Id".to_string(), v.into()); }
-        if let Some(v) = self.src_callsign { m.insert("Src-Callsign".to_string(), v.into()); }
-        if let Some(v) = self.dst_callsign { m.insert("Dst-Callsign".to_string(), v.into()); }
+        if let Some(v) = &self.message_id { m.insert("Message-Id".to_string(), (*v).into()); }
+        if let Some(v) = &self.src_callsign { m.insert("Src-Callsign".to_string(), v.clone().into()); }
+        if let Some(v) = &self.dst_callsign { m.insert("Dst-Callsign".to_string(), v.clone().into()); }
         
-        let mut final_ct = self.content_type.clone();
-        if let Some(cf) = self.content_format {
-            if let Some(ct) = rev_coap_content_formats().get(&cf) {
-                final_ct = Some(ct.to_string());
-            }
+        if let Some(mt) = self.media_type() {
+            m.insert("Content-Type".to_string(), mt.to_mime().into());
         }
-        if let Some(ct) = final_ct { m.insert("Content-Type".to_string(), ct.into()); }
 
         if let Some(ce) = self.content_encoding {
             let list: Vec<serde_json::Value> = ce.0.iter().map(|e| e.to_string().into()).collect();
@@ -85,13 +207,13 @@ impl Header {
             }
         }
         
-        if let Some(v) = self.repr_digest { m.insert("Repr-Digest".to_string(), hex::encode(v).into()); }
-        if let Some(v) = self.content_digest { m.insert("Content-Digest".to_string(), hex::encode(v).into()); }
-        if let Some(v) = self.file_size { m.insert("File-Size".to_string(), v.into()); }
-        if let Some(v) = self.chunk_id { m.insert("Chunk-Id".to_string(), v.into()); }
-        if let Some(v) = self.original_message_id { m.insert("Original-Message-Id".to_string(), v.into()); }
-        if let Some(v) = self.total_chunks { m.insert("Total-Chunks".to_string(), v.into()); }
-        if let Some(v) = self.payload_size { m.insert("Payload-Size".to_string(), v.into()); }
+        if let Some(v) = &self.repr_digest { m.insert("Repr-Digest".to_string(), hex::encode(v).into()); }
+        if let Some(v) = &self.content_digest { m.insert("Content-Digest".to_string(), hex::encode(v).into()); }
+        if let Some(v) = &self.file_size { m.insert("File-Size".to_string(), (*v).into()); }
+        if let Some(v) = &self.chunk_id { m.insert("Chunk-Id".to_string(), (*v).into()); }
+        if let Some(v) = &self.original_message_id { m.insert("Original-Message-Id".to_string(), (*v).into()); }
+        if let Some(v) = &self.total_chunks { m.insert("Total-Chunks".to_string(), (*v).into()); }
+        if let Some(v) = &self.payload_size { m.insert("Payload-Size".to_string(), (*v).into()); }
 
         m
     }
@@ -289,12 +411,7 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Vec<u8>> {
     let mut h = header.clone();
     
     // 1. Optimize Content-Type to Content-Format
-    if let Some(ct) = &h.content_type {
-        if let Some(coap_id) = get_coap_id(ct) {
-            h.content_format = Some(coap_id);
-            h.content_type = None;
-        }
-    }
+    h.set_media_type(h.media_type());
     
     // 2. Omit default Content-Format 0
     if h.content_format == Some(0) {

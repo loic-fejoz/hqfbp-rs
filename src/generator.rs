@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crate::{Header, pack, unpack, ContentEncoding};
+use crate::{Header, pack, unpack, ContentEncoding, MediaType};
 use crate::codec::*;
 
 // EncValue removed in favor of crate::ContentEncoding
@@ -119,7 +119,7 @@ impl PDUGenerator {
         encs
     }
 
-    pub fn generate(&mut self, data: &[u8], content_type: Option<String>) -> Result<Vec<Vec<u8>>> {
+    pub fn generate(&mut self, data: &[u8], media_type: Option<MediaType>) -> Result<Vec<Vec<u8>>> {
         let file_size = data.len() as u64;
         let full_encs = self.resolve_encodings();
         let mut current_chunks = vec![data.to_vec()];
@@ -131,13 +131,13 @@ impl PDUGenerator {
         };
         let data_orig_id = self.next_msg_id;
 
-        let header_template = Header {
+        let mut header_template = Header {
             file_size: Some(file_size),
             src_callsign: self.src_callsign.clone(),
             dst_callsign: self.dst_callsign.clone(),
-            content_type,
             ..Default::default()
         };
+        header_template.set_media_type(media_type);
 
         let mut after_boundary = false;
         for i in 0..full_encs.len() {
@@ -164,8 +164,7 @@ impl PDUGenerator {
                     header.message_id = Some(msg_id);
                     
                     if idx > 0 {
-                        header.content_type = None;
-                        header.content_format = None;
+                        header.set_media_type(None);
                     }
 
                     header.content_encoding = Some(crate::EncodingList(full_encs.clone()));
@@ -230,7 +229,7 @@ impl PDUGenerator {
             ann_header.content_encoding = Some(crate::EncodingList(full_encs.clone()));
             
             let ann_payload = minicbor::to_vec(&ann_header)?;
-            let ann_pdus = ann_enc.generate(&ann_payload, Some("application/vnd.hqfbp+cbor".to_string()))?;
+            let ann_pdus = ann_enc.generate(&ann_payload, Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())))?;
             final_pdus.extend(ann_pdus);
         }
 

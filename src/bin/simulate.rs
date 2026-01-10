@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use clap::{Parser, ValueEnum};
-use hqfbp_rs::generator::{PDUGenerator};
+use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::ContentEncoding;
 use hqfbp_rs::deframer::{Deframer, Event};
 use rand::{Rng, RngCore};

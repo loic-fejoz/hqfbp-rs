@@ -1,7 +1,7 @@
 use anyhow::{Result, Context};
 use clap::{Parser};
-use hqfbp_rs::generator::{PDUGenerator};
-use hqfbp_rs::ContentEncoding;
+use hqfbp_rs::generator::PDUGenerator;
+use hqfbp_rs::{ContentEncoding, MediaType};
 use std::fs::File;
 use std::io::{Read, Write};
 
@@ -114,7 +114,7 @@ fn main() -> Result<()> {
         args.msg_id.unwrap_or(1),
     );
 
-    let pdus = generator.generate(&data, Some(content_type))?;
+    let pdus = generator.generate(&data, Some(MediaType::Type(content_type)))?;
 
     let output_path = args.output.unwrap_or_else(|| format!("{}.kiss", args.filepath));
     let mut out_file = File::create(&output_path).context("Failed to create output file")?;
