@@ -23,5 +23,10 @@ This document outlines implementation logic patterns to maintain protocol consis
 - **Zero-Copy Intent:** While `Vec<u8>` is used for simplicity, avoid unnecessary clones in the `codec` loop. 
 - **Chunking:** `PDUGenerator` should naturally align chunks to the `n` parameter of Reed-Solomon or the MTU of RaptorQ if those encodings are active.
 
+## 6. Static Initialization
+- **Avoid `lazy_static!`:** We have modernized the codebase to use the standard library's `std::sync::OnceLock`.
+- **Pattern:** Use `OnceLock` within a getter function for lazy, thread-safe initialization of regexes, mapping tables, or other heavy statics.
+- **Example:** See `src/lib.rs` for `get_rs_re()` or `hqfbp_cbor_keys()` implementations.
+
 > [!NOTE]
 > **Coding Style:** Follow standard Rust idiomatic patterns. Run `cargo fmt` and `cargo clippy` to enforce baseline quality without cluttering this guide.

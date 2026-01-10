@@ -8,7 +8,7 @@ Used for verifying individual components (e.g., [tests/test_rs.rs](file:///home/
 
 ## 2. Regression Suite
 Location: [tests/test_regressions.rs](file:///home/loic/projets/hqfbp-rs/tests/test_regressions.rs).
-**CRITICAL:** Every bug fix related to protocol logic must add a test case here. This ensures fixes for announcement handling, PDU nesting, and shortened FEC blocks remain stable.
+**CRITICAL:** EVERY bug fix MUST be accompanied by a new unit test. Protocol-level bugs should be added to the regression suite here, while component-specific bugs can be added to their respective unit tests in `tests/*.rs`. This ensures the bug never returns and documents the fix.
 
 ## 3. Simulation (Power Testing)
 Location: [src/bin/simulate.rs](file:///home/loic/projets/hqfbp-rs/src/bin/simulate.rs).

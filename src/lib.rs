@@ -2,7 +2,7 @@ use minicbor::{Encode, Decode, Decoder, Encoder};
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use std::collections::HashMap;
-use lazy_static::lazy_static;
+use std::sync::OnceLock;
 
 pub mod codec;
 pub mod generator;
@@ -70,7 +70,7 @@ impl Header {
         
         let mut final_ct = self.content_type.clone();
         if let Some(cf) = self.content_format {
-            if let Some(ct) = REV_COAP_CONTENT_FORMATS.get(&cf) {
+            if let Some(ct) = rev_coap_content_formats().get(&cf) {
                 final_ct = Some(ct.to_string());
             }
         }
@@ -97,14 +97,12 @@ impl Header {
     }
 }
 
-lazy_static! {
-    static ref RS_RE: Regex = Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap();
-    static ref RQ_RE: Regex = Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap();
-    static ref CONV_RE: Regex = Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap();
-    static ref SCR_RE: Regex = Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap();
-    static ref CHUNK_RE: Regex = Regex::new(r"chunk\((\d+)\)").unwrap();
-    static ref REPEAT_RE: Regex = Regex::new(r"repeat\((\d+)\)").unwrap();
-}
+fn get_rs_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap()) }
+fn get_rq_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap()) }
+fn get_conv_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap()) }
+fn get_scr_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap()) }
+fn get_chunk_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"chunk\((\d+)\)").unwrap()) }
+fn get_repeat_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"repeat\((\d+)\)").unwrap()) }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentEncoding {
@@ -160,19 +158,19 @@ impl TryFrom<&str> for ContentEncoding {
         else if s == "lzma" || s == "4" { Ok(ContentEncoding::Lzma) }
         else if s == "crc16" || s == "5" { Ok(ContentEncoding::Crc16) }
         else if s == "crc32" || s == "6" { Ok(ContentEncoding::Crc32) }
-        else if let Some(m) = RS_RE.captures(s) {
+        else if let Some(m) = get_rs_re().captures(s) {
             Ok(ContentEncoding::ReedSolomon(m[1].parse()?, m[2].parse()?))
-        } else if let Some(m) = RQ_RE.captures(s) {
+        } else if let Some(m) = get_rq_re().captures(s) {
             Ok(ContentEncoding::RaptorQ(m[1].parse()?, m[2].parse()?, m[3].parse()?))
-        } else if let Some(m) = CONV_RE.captures(s) {
+        } else if let Some(m) = get_conv_re().captures(s) {
             Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
-        } else if let Some(m) = SCR_RE.captures(s) {
+        } else if let Some(m) = get_scr_re().captures(s) {
             let ps = &m[1];
             let p = if ps.starts_with("0x") { u64::from_str_radix(&ps[2..], 16)? } else { ps.parse()? };
             Ok(ContentEncoding::Scrambler(p))
-        } else if let Some(m) = CHUNK_RE.captures(s) {
+        } else if let Some(m) = get_chunk_re().captures(s) {
             Ok(ContentEncoding::Chunk(m[1].parse()?))
-        } else if let Some(m) = REPEAT_RE.captures(s) {
+        } else if let Some(m) = get_repeat_re().captures(s) {
             Ok(ContentEncoding::Repeat(m[1].parse()?))
         } else {
             Ok(ContentEncoding::OtherString(s.to_string()))
@@ -284,7 +282,7 @@ impl<C> Encode<C> for EncodingList {
 }
 
 pub fn get_coap_id(mimetype: &str) -> Option<u16> {
-    COAP_CONTENT_FORMATS.get(mimetype).copied()
+    coap_content_formats().get(mimetype).copied()
 }
 
 pub fn pack(header: &Header, payload: &[u8]) -> Result<Vec<u8>> {
@@ -342,8 +340,9 @@ pub fn unpack(data: &[u8]) -> Result<(Header, Vec<u8>)> {
     Ok((header, payload))
 }
 
-lazy_static! {
-    pub static ref HQFBP_CBOR_KEYS: HashMap<&'static str, u8> = {
+pub fn hqfbp_cbor_keys() -> &'static HashMap<&'static str, u8> {
+    static MAP: OnceLock<HashMap<&'static str, u8>> = OnceLock::new();
+    MAP.get_or_init(|| {
         let mut m = HashMap::new();
         m.insert("Message-Id", 0);
         m.insert("Src-Callsign", 1);
@@ -359,17 +358,23 @@ lazy_static! {
         m.insert("Total-Chunks", 11);
         m.insert("Payload-Size", 12);
         m
-    };
+    })
+}
 
-    pub static ref REV_KEYS: HashMap<u8, &'static str> = {
+pub fn rev_keys() -> &'static HashMap<u8, &'static str> {
+    static MAP: OnceLock<HashMap<u8, &'static str>> = OnceLock::new();
+    MAP.get_or_init(|| {
         let mut m = HashMap::new();
-        for (k, v) in HQFBP_CBOR_KEYS.iter() {
+        for (k, v) in hqfbp_cbor_keys().iter() {
             m.insert(*v, *k);
         }
         m
-    };
+    })
+}
 
-    pub static ref COAP_CONTENT_FORMATS: HashMap<&'static str, u16> = {
+pub fn coap_content_formats() -> &'static HashMap<&'static str, u16> {
+    static MAP: OnceLock<HashMap<&'static str, u16>> = OnceLock::new();
+    MAP.get_or_init(|| {
         let mut m = HashMap::new();
         m.insert("text/plain;charset=utf-8", 0);
         m.insert("application/link-format", 40);
@@ -392,17 +397,23 @@ lazy_static! {
         m.insert("application/cose-key-set", 102);
         m.insert("application/or-tecap", 116);
         m
-    };
+    })
+}
 
-    pub static ref REV_COAP_CONTENT_FORMATS: HashMap<u16, &'static str> = {
+pub fn rev_coap_content_formats() -> &'static HashMap<u16, &'static str> {
+    static MAP: OnceLock<HashMap<u16, &'static str>> = OnceLock::new();
+    MAP.get_or_init(|| {
         let mut m = HashMap::new();
-        for (k, v) in COAP_CONTENT_FORMATS.iter() {
+        for (k, v) in coap_content_formats().iter() {
             m.insert(*v, *k);
         }
         m
-    };
+    })
+}
 
-    pub static ref ENCODING_REGISTRY: HashMap<i8, &'static str> = {
+pub fn encoding_registry() -> &'static HashMap<i8, &'static str> {
+    static MAP: OnceLock<HashMap<i8, &'static str>> = OnceLock::new();
+    MAP.get_or_init(|| {
         let mut m = HashMap::new();
         m.insert(-1, "h");
         m.insert(0, "identity");
@@ -413,15 +424,18 @@ lazy_static! {
         m.insert(5, "crc16");
         m.insert(6, "crc32");
         m
-    };
+    })
+}
 
-    pub static ref REV_ENCODING_REGISTRY: HashMap<&'static str, i8> = {
+pub fn rev_encoding_registry() -> &'static HashMap<&'static str, i8> {
+    static MAP: OnceLock<HashMap<&'static str, i8>> = OnceLock::new();
+    MAP.get_or_init(|| {
         let mut m = HashMap::new();
-        for (k, v) in ENCODING_REGISTRY.iter() {
+        for (k, v) in encoding_registry().iter() {
             m.insert(*v, *k);
         }
         m
-    };
+    })
 }
 
 pub fn add(left: u64, right: u64) -> u64 {
