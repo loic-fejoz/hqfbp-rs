@@ -3,6 +3,7 @@ use clap::Parser;
 use hqfbp_rs::deframer::{Deframer, Event};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use chrono::Utc;
 
@@ -12,8 +13,11 @@ struct Args {
     #[arg(help = "Output folder to save received files")]
     output: String,
 
-    #[arg(help = "Input KISS file (default: stdin)", default_value = "-")]
+    #[arg(long, help = "Input KISS file (default: stdin)", default_value = "-")]
     input: String,
+
+    #[arg(long, help = "KISS-over-TCP server address (e.g., localhost:8001)")]
+    tcp: Option<String>,
 }
 
 const FEND: u8 = 0xC0;
@@ -78,12 +82,16 @@ fn main() -> Result<()> {
     
     fs::create_dir_all(&args.output).context("Failed to create output directory")?;
 
-    println!("Reading from: {}", if args.input == "-" { "stdin" } else { &args.input });
     println!("Saving files to: {}", fs::canonicalize(&args.output)?.display());
 
-    let mut input: Box<dyn Read> = if args.input == "-" {
+    let mut input: Box<dyn Read> = if let Some(addr) = args.tcp {
+        println!("Connecting to KISS-over-TCP server at {}...", addr);
+        Box::new(TcpStream::connect(addr).context("Failed to connect to TCP server")?)
+    } else if args.input == "-" {
+        println!("Reading from: stdin");
         Box::new(io::stdin())
     } else {
+        println!("Reading from file: {}", args.input);
         Box::new(File::open(&args.input).context("Failed to open input file")?)
     };
 

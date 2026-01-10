@@ -4,18 +4,13 @@ use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::{ContentEncoding, MediaType};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::net::TcpStream;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Pack a file into KISS frames using the HQFBP protocol.")]
 struct Args {
     #[arg(help = "Path to the file to send")]
     filepath: String,
-
-    #[arg(help = "Destination IP address (ignored)")]
-    ip: String,
-
-    #[arg(help = "Destination UDP port (ignored)")]
-    port: u16,
 
     #[arg(long, help = "Source callsign")]
     src_callsign: String,
@@ -37,6 +32,9 @@ struct Args {
 
     #[arg(long, help = "Output KISS file path")]
     output: Option<String>,
+
+    #[arg(long, help = "KISS-over-TCP server address (e.g., localhost:8001)")]
+    tcp: Option<String>,
 }
 
 const FEND: u8 = 0xC0;
@@ -116,16 +114,22 @@ fn main() -> Result<()> {
 
     let pdus = generator.generate(&data, Some(MediaType::Type(content_type)))?;
 
-    let output_path = args.output.unwrap_or_else(|| format!("{}.kiss", args.filepath));
-    let mut out_file = File::create(&output_path).context("Failed to create output file")?;
+    let mut out: Box<dyn Write> = if let Some(addr) = args.tcp {
+        println!("Connecting to KISS-over-TCP server at {}...", addr);
+        Box::new(TcpStream::connect(addr).context("Failed to connect to TCP server")?)
+    } else {
+        let output_path = args.output.unwrap_or_else(|| format!("{}.kiss", args.filepath));
+        println!("Writing to KISS file {}...", output_path);
+        Box::new(File::create(&output_path).context("Failed to create output file")?)
+    };
 
     let mut count = 0;
     for pdu in pdus {
         let frame = encode_kiss_frame(&pdu);
-        out_file.write_all(&frame)?;
+        out.write_all(&frame)?;
         count += 1;
     }
 
-    println!("Successfully packed {} frames of {} into {}", count, args.filepath, output_path);
+    println!("Successfully sent/packed {} frames.", count);
     Ok(())
 }
