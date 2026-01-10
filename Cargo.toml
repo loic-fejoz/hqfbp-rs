@@ -32,3 +32,9 @@ criterion = "0.5"
 [[bench]]
 name = "bench_hqfbp"
 harness = false
+
+[profile.release]
+codegen-units = 1
+debug = true
+strip = true
+lto = true
