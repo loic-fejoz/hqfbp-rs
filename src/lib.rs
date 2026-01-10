@@ -3,6 +3,7 @@ use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+use bytes::Bytes;
 
 pub mod codec;
 pub mod generator;
@@ -407,7 +408,7 @@ pub fn get_coap_id(mimetype: &str) -> Option<u16> {
     coap_content_formats().get(mimetype).copied()
 }
 
-pub fn pack(header: &Header, payload: &[u8]) -> Result<Vec<u8>> {
+pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
     let mut h = header.clone();
     
     // 1. Optimize Content-Type to Content-Format
@@ -430,11 +431,11 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Vec<u8>> {
     let mut encoder = Encoder::new(&mut buf);
     encoder.encode(&h).map_err(|e| anyhow!("Header encode failed: {}", e))?;
     buf.extend_from_slice(payload);
-    Ok(buf)
+    Ok(Bytes::from(buf))
 }
 
-pub fn unpack(data: &[u8]) -> Result<(Header, Vec<u8>)> {
-    let mut decoder = Decoder::new(data);
+pub fn unpack(data: Bytes) -> Result<(Header, Bytes)> {
+    let mut decoder = Decoder::new(&data);
     let header: Header = match decoder.decode() {
         Ok(h) => h,
         Err(e) => {
@@ -445,12 +446,12 @@ pub fn unpack(data: &[u8]) -> Result<(Header, Vec<u8>)> {
         bail!("Decoded header is missing identifying fields (message_id or content_type)");
     }
     let pos = decoder.position();
-    let payload = data[pos..].to_vec();
+    let mut payload = data.slice(pos..);
     
     // Trim payload based on payload_size if present
     if let Some(size) = header.payload_size {
         if payload.len() > size as usize {
-            return Ok((header, payload[..size as usize].to_vec()));
+            payload = payload.slice(..size as usize);
         }
     }
     

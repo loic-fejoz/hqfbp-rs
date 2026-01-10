@@ -1,6 +1,6 @@
-use hqfbp_rs::{Header, pack, unpack};
-use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::generator::{PDUGenerator};
+use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::{Header, pack, unpack};
 
 #[test]
 fn test_deframer_single_pdu() {
@@ -18,14 +18,14 @@ fn test_deframer_single_pdu() {
     // Expect PDUEvent then MessageEvent
     let ev1 = deframer.next_event().expect("Expected PDUEvent");
     if let Event::PDU(pe) = ev1 {
-        assert_eq!(pe.payload, payload);
+        assert_eq!(pe.payload.as_ref(), payload);
     } else {
         panic!("Expected Pdu event, got {:?}", ev1);
     }
     
     let ev2 = deframer.next_event().expect("Expected MessageEvent");
     if let Event::Message(me) = ev2 {
-        assert_eq!(me.payload, payload);
+        assert_eq!(me.payload.as_ref(), payload);
         assert_eq!(me.header.src_callsign, Some("N0CALL".to_string()));
     } else {
         panic!("Expected Message event, got {:?}", ev2);
@@ -56,7 +56,7 @@ fn test_deframer_chunked() {
         // Check that we get exactly one PDUEvent per receive_bytes
         let ev = deframer.next_event().expect("Expected Pdu event");
         if let Event::PDU(pe) = ev {
-            let (_, p) = unpack(pdu).unwrap();
+            let (_, p) = unpack(pdu.clone()).unwrap();
             assert_eq!(pe.payload, p);
             
             // Check Message-Id monotonicity in PDUs
@@ -83,7 +83,7 @@ fn test_deframer_chunked() {
         } else {
             let ev = msg_ev.expect("Expected MessageEvent at last chunk");
             if let Event::Message(me) = ev {
-                assert_eq!(me.payload, data);
+                assert_eq!(me.payload.as_ref(), data);
                 assert_eq!(me.header.src_callsign, Some("F4JXQ-1".to_string()));
                 // Message-Id, Chunk-Id, Original-Message-Id, Total-Chunks are excluded from merged header
                 assert!(me.header.message_id.is_none());
@@ -122,7 +122,7 @@ fn test_deframer_multi_sender() {
     deframer.next_event(); // Skip PDU event
     let ev1 = deframer.next_event().expect("Expected S1 message");
     if let Event::Message(me) = ev1 {
-        assert_eq!(me.payload, b"S1DATA");
+        assert_eq!(me.payload.as_ref(), b"S1DATA");
         assert_eq!(me.header.src_callsign, Some("S1".to_string()));
     }
     
@@ -130,7 +130,7 @@ fn test_deframer_multi_sender() {
     deframer.next_event(); // Skip PDU event
     let ev2 = deframer.next_event().expect("Expected S2 message");
     if let Event::Message(me) = ev2 {
-        assert_eq!(me.payload, b"S2DATA");
+        assert_eq!(me.payload.as_ref(), b"S2DATA");
         assert_eq!(me.header.src_callsign, Some("S2".to_string()));
     }
 }

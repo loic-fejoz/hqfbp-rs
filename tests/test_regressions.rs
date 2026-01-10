@@ -14,7 +14,7 @@ fn test_regression_rs_shortened_block() {
     assert_eq!(encoded.len(), 70);
     
     let (decoded, _) = rs_decode(&encoded, n, k).expect("RS decode failed");
-    assert_eq!(decoded, data);
+    assert_eq!(decoded.as_ref(), data);
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn test_regression_deframer_announcement_priority() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert_eq!(me.payload, data);
+            assert_eq!(me.payload.as_ref(), data);
             found = true;
         }
     }
@@ -80,7 +80,7 @@ fn test_regression_rs_multi_layer_deframing() {
             }
             Event::Message(me) => {
                 println!("[TEST] Received Message: payload_len={}", me.payload.len());
-                assert_eq!(me.payload, data);
+                assert_eq!(me.payload.as_ref(), data);
                 found = true;
             }
         }

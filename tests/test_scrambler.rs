@@ -61,7 +61,7 @@ fn test_generator_deframer_scrambler_integration() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert_eq!(me.payload, data);
+            assert_eq!(me.payload.as_ref(), data);
             found = true;
         }
     }

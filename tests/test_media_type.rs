@@ -20,7 +20,7 @@ fn test_header_media_type_optimization() {
     assert_eq!(header.content_type, None);
     
     let packed = pack(&header, b"{}").expect("Pack failed");
-    let (unpacked, _) = unpack(&packed).expect("Unpack failed");
+    let (unpacked, _) = unpack(packed).expect("Unpack failed");
     
     assert_eq!(unpacked.content_format, Some(50));
     assert_eq!(unpacked.content_type, None);
@@ -37,7 +37,7 @@ fn test_header_unknown_mime() {
     assert_eq!(header.content_type, Some("application/x-custom".to_string()));
     
     let packed = pack(&header, b"data").expect("Pack failed");
-    let (unpacked, _) = unpack(&packed).expect("Unpack failed");
+    let (unpacked, _) = unpack(packed).expect("Unpack failed");
     
     assert_eq!(unpacked.content_type, Some("application/x-custom".to_string()));
     assert_eq!(unpacked.media_type(), Some(MediaType::Type("application/x-custom".to_string())));

@@ -3,6 +3,7 @@ use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use reed_solomon::Encoder as RSEncoder;
 use reed_solomon::Decoder as RSDecoder;
 use raptorq::{Encoder as RQEncoder, Decoder as RQDecoder};
+use bytes::Bytes;
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -184,7 +185,7 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
     Ok((decoded, total_corrected))
 }
 
-pub fn rq_encode(data: &[u8], original_count: usize, mtu: u16, repair_count: u32) -> Result<Vec<Vec<u8>>> {
+pub fn rq_encode(data: &[u8], original_count: usize, mtu: u16, repair_count: u32) -> Result<Vec<Bytes>> {
     let mut padded_data = data.to_vec();
     padded_data.resize(original_count, 0);
     
@@ -192,14 +193,14 @@ pub fn rq_encode(data: &[u8], original_count: usize, mtu: u16, repair_count: u32
     let encoder = RQEncoder::new(&padded_data, oti);
     let packets = encoder.get_encoded_packets(repair_count);
     
-    Ok(packets.into_iter().map(|p| p.serialize()).collect())
+    Ok(packets.into_iter().map(|p| Bytes::from(p.serialize())).collect())
 }
 
-pub fn rq_decode(packets: Vec<Vec<u8>>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
+pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
     let oti = raptorq::ObjectTransmissionInformation::new(original_count as u64, mtu, 1, 1, 1);
     let mut decoder = RQDecoder::new(oti);
     for packet_bytes in packets {
-        let packet = raptorq::EncodingPacket::deserialize(&packet_bytes);
+        let packet = raptorq::EncodingPacket::deserialize(packet_bytes.as_ref());
         if let Some(res) = decoder.decode(packet) {
             return Ok(res);
         }

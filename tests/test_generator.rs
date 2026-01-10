@@ -19,7 +19,7 @@ fn test_generator_single_pdu() {
     let pdus = generator.generate(data, Some(MediaType::Type("text/plain;charset=utf-8".to_string()))).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
-    let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
+    let (header, payload) = unpack(pdus[0].clone()).expect("Unpack failed");
     
     assert_eq!(header.message_id, Some(1));
     assert_eq!(header.src_callsign, Some("F4JXQ-1".to_string()));
@@ -31,7 +31,7 @@ fn test_generator_single_pdu() {
         Some(el) => assert!(el.0.iter().any(|e| matches!(e, ContentEncoding::H))),
         _ => panic!("Expected boundary encoding"),
     }
-    assert_eq!(payload, data);
+    assert_eq!(payload.as_ref(), data);
 }
 
 #[test]
@@ -50,7 +50,7 @@ fn test_generator_initial_msg_id() {
     let pdus = generator.generate(data, None).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
-    let (header, _) = unpack(&pdus[0]).expect("Unpack failed");
+    let (header, _) = unpack(pdus[0].clone()).expect("Unpack failed");
     assert_eq!(header.message_id, Some(initial_id));
 }
 
@@ -69,7 +69,7 @@ fn test_generator_single_gzip_pdu() {
     let pdus = generator.generate(data, Some(MediaType::Type("text/plain;charset=utf-8".to_string()))).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
-    let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
+    let (header, payload) = unpack(pdus[0].clone()).expect("Unpack failed");
     
     assert_eq!(header.message_id, Some(1));
     assert_eq!(header.src_callsign, Some("F4JXQ-1".to_string()));
@@ -78,7 +78,7 @@ fn test_generator_single_gzip_pdu() {
     encoder.write_all(data).unwrap();
     let compressed_data = encoder.finish().unwrap();
     
-    assert_eq!(payload, compressed_data);
+    assert_eq!(payload.as_ref(), compressed_data);
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn test_generator_single_lzma_pdu() {
     let pdus = generator.generate(&data, None).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
-    let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
+    let (header, payload) = unpack(pdus[0].clone()).expect("Unpack failed");
     
     match header.content_encoding {
         Some(el) => {
@@ -109,7 +109,7 @@ fn test_generator_single_lzma_pdu() {
     }
     
     let compressed = hqfbp_rs::codec::lzma_compress(&data).unwrap();
-    assert_eq!(payload, compressed);
+    assert_eq!(payload.as_ref(), compressed);
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn test_generator_single_brotli_pdu() {
     let pdus = generator.generate(&data, None).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
-    let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
+    let (header, payload) = unpack(pdus[0].clone()).expect("Unpack failed");
     
     match header.content_encoding {
         Some(el) => {
@@ -140,7 +140,7 @@ fn test_generator_single_brotli_pdu() {
     }
     
     let mut decompressed = Vec::new();
-    let mut brotli_decoder = brotli::Decompressor::new(&payload[..], 4096);
+    let mut brotli_decoder = brotli::Decompressor::new(payload.as_ref(), 4096);
     std::io::copy(&mut brotli_decoder, &mut decompressed).unwrap();
     
     assert_eq!(decompressed, data);
@@ -164,8 +164,8 @@ fn test_generator_gzip_before_chunking() {
     let pdus = generator.generate(&data, None).expect("Generate failed");
     
     assert_eq!(pdus.len(), 1);
-    let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
-    assert_eq!(payload, compressed_data);
+    let (header, payload) = unpack(pdus[0].clone()).expect("Unpack failed");
+    assert_eq!(payload.as_ref(), compressed_data);
     assert_eq!(header.file_size, Some(100));
 }
 
@@ -183,7 +183,7 @@ fn test_generator_crc_payload_only() {
     let data = b"payload test";
     let pdus = generator.generate(data, None).expect("Generate failed");
     
-    let (_, payload) = unpack(&pdus[0]).expect("Unpack failed");
+    let (_, payload) = unpack(pdus[0].clone()).expect("Unpack failed");
     // The whole payload should have CRC at the end
     let crc = &payload[payload.len()-4..];
     let original = &payload[..payload.len()-4];
@@ -206,14 +206,14 @@ fn test_generator_crc_covering_header() {
     let pdus = generator.generate(data, None).expect("Generate failed");
     
     // The whole PDU should have CRC at the end
-    let pdu = &pdus[0];
+    let pdu = pdus[0].clone();
     let crc = &pdu[pdu.len()-4..];
-    let pdu_no_crc = &pdu[..pdu.len()-4];
-    assert_eq!(crc, hqfbp_rs::codec::crc32_std(pdu_no_crc));
+    let pdu_no_crc = pdu.slice(..pdu.len()-4);
+    assert_eq!(crc, hqfbp_rs::codec::crc32_std(&pdu_no_crc));
     
     // Now unpack the PDU without CRC
     let (header, payload) = unpack(pdu_no_crc).expect("Unpack failed");
-    assert_eq!(payload, data);
+    assert_eq!(payload.as_ref(), data);
     match header.content_encoding {
         Some(el) => assert_eq!(el.0, vec![ContentEncoding::H, ContentEncoding::Crc32]),
         _ => panic!("Expected encoding list"),
@@ -238,16 +238,16 @@ fn test_generator_announcement() {
     assert_eq!(pdus.len(), 2);
     
     // 1. Verify Announcement PDU
-    let ann_pdu = &pdus[0];
+    let ann_pdu = pdus[0].clone();
     let ann_crc = &ann_pdu[ann_pdu.len()-2..];
-    let ann_pdu_no_crc = &ann_pdu[..ann_pdu.len()-2];
-    assert_eq!(ann_crc, hqfbp_rs::codec::crc16_ccitt(ann_pdu_no_crc));
+    let ann_pdu_no_crc = ann_pdu.slice(..ann_pdu.len()-2);
+    assert_eq!(ann_crc, hqfbp_rs::codec::crc16_ccitt(&ann_pdu_no_crc));
     
     let (ann_h, ann_p_bytes) = unpack(ann_pdu_no_crc).expect("Unpack ann failed");
     assert_eq!(ann_h.content_type, Some("application/vnd.hqfbp+cbor".to_string()));
     
     // Decode announcement payload
-    let ann_header: Header = minicbor::decode(&ann_p_bytes).expect("Decode ann payload failed");
+    let ann_header: Header = minicbor::decode(ann_p_bytes.as_ref()).expect("Decode ann payload failed");
     // Announcement referred msg-id is 2
     assert_eq!(ann_header.message_id, Some(2));
     match ann_header.content_encoding {
@@ -256,15 +256,15 @@ fn test_generator_announcement() {
     }
     
     // 2. Verify Data PDU
-    let data_pdu = &pdus[1];
+    let data_pdu = pdus[1].clone();
     let data_crc = &data_pdu[data_pdu.len()-4..];
-    let data_pdu_no_crc = &data_pdu[..data_pdu.len()-4];
-    assert_eq!(data_crc, hqfbp_rs::codec::crc32_std(data_pdu_no_crc));
+    let data_pdu_no_crc = data_pdu.slice(..data_pdu.len()-4);
+    assert_eq!(data_crc, hqfbp_rs::codec::crc32_std(&data_pdu_no_crc));
     let (data_h, data_p) = unpack(data_pdu_no_crc).expect("Unpack data failed");
     
     assert_eq!(data_h.message_id, Some(2));
     
-    let mut decoder = flate2::read::GzDecoder::new(&data_p[..]);
+    let mut decoder = flate2::read::GzDecoder::new(data_p.as_ref());
     let mut decompressed = Vec::new();
     std::io::Read::read_to_end(&mut decoder, &mut decompressed).unwrap();
     assert_eq!(decompressed, data);
@@ -289,12 +289,12 @@ fn test_generator_chunking() {
     assert_eq!(pdus.len(), 6);
     
     let mut reassembled = Vec::new();
-    for (i, pdu) in pdus.iter().enumerate() {
-        let (header, payload) = unpack(pdu).expect("Unpack failed");
-        assert_eq!(header.chunk_id, Some(i as u32));
+    for (_i, pdu) in pdus.iter().enumerate() {
+        let (header, payload) = unpack(pdu.clone()).expect("Unpack failed");
+        assert_eq!(header.chunk_id, Some(_i as u32));
         assert_eq!(header.total_chunks, Some(6));
         assert_eq!(header.original_message_id, Some(1));
-        reassembled.extend_from_slice(&payload);
+        reassembled.extend_from_slice(payload.as_ref());
     }
     assert_eq!(reassembled, data);
 }

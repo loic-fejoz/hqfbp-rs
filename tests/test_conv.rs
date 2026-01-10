@@ -59,16 +59,16 @@ fn test_generator_deframer_conv_integration() {
     deframer.receive_bytes(&pdus[0]);
     
     // Feed data PDU (with some noise)
-    let mut pdu_with_noise = pdus[1].clone();
-    let mid = pdu_with_noise.len() / 2;
-    pdu_with_noise[mid] ^= 0x01;
+    let mut pdu_vec = pdus[1].to_vec();
+    let mid = pdu_vec.len() / 2;
+    pdu_vec[mid] ^= 0x01;
     
-    deframer.receive_bytes(&pdu_with_noise);
+    deframer.receive_bytes(&pdu_vec);
     
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let hqfbp_rs::deframer::Event::Message(me) = ev {
-            assert_eq!(me.payload, data);
+            assert_eq!(me.payload.as_ref(), data);
             found = true;
         }
     }

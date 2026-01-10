@@ -3,6 +3,7 @@ use hqfbp_rs::generator::{PDUGenerator};
 use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::ContentEncoding;
 
+
 #[test]
 fn test_rq_basic_encode_decode() {
     let mut data = Vec::new();
@@ -71,7 +72,7 @@ fn test_generator_deframer_rq_post_boundary() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.starts_with(data));
+            assert!(me.payload.as_ref().starts_with(data));
             found = true;
         }
     }

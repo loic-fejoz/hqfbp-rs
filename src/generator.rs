@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crate::{Header, pack, unpack, ContentEncoding, MediaType};
 use crate::codec::*;
+use bytes::Bytes;
 
 // EncValue removed in favor of crate::ContentEncoding
 
@@ -49,7 +50,7 @@ impl PDUGenerator {
         id
     }
 
-    fn apply_encodings(&self, data: &[u8], encodings: &[ContentEncoding]) -> Result<Vec<Vec<u8>>> {
+    fn apply_encodings(&self, data: &[u8], encodings: &[ContentEncoding]) -> Result<Vec<Bytes>> {
         let mut current_data = data.to_vec();
         for enc in encodings {
             match enc {
@@ -68,7 +69,8 @@ impl PDUGenerator {
                     current_data = rs_encode(&current_data, *n, *k)?;
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, repairs) => {
-                    return Ok(rq_encode(&current_data, *rq_len, *mtu, *repairs)?);
+                    let res = rq_encode(&current_data, *rq_len, *mtu, *repairs)?;
+                    return Ok(res.into_iter().map(Bytes::from).collect());
                 }
                 ContentEncoding::Conv(k, rate) => {
                     current_data = conv_encode(&current_data, *k, rate)?;
@@ -79,7 +81,7 @@ impl PDUGenerator {
                 _ => {}
             }
         }
-        Ok(vec![current_data])
+        Ok(vec![Bytes::from(current_data)])
     }
 
     fn resolve_encodings(&self) -> Vec<ContentEncoding> {
@@ -119,10 +121,10 @@ impl PDUGenerator {
         encs
     }
 
-    pub fn generate(&mut self, data: &[u8], media_type: Option<MediaType>) -> Result<Vec<Vec<u8>>> {
+    pub fn generate(&mut self, data: &[u8], media_type: Option<MediaType>) -> Result<Vec<Bytes>> {
         let file_size = data.len() as u64;
         let full_encs = self.resolve_encodings();
-        let mut current_chunks = vec![data.to_vec()];
+        let mut current_chunks = vec![Bytes::copy_from_slice(data)];
         
         let ann_msg_id = if self.announcement_encoder.is_some() {
             Some(self.get_next_msg_id())
@@ -177,8 +179,11 @@ impl PDUGenerator {
             } else if let ContentEncoding::Chunk(size) = enc {
                 let mut next_chunks = Vec::new();
                 for chunk in current_chunks {
-                    for sub in chunk.chunks(*size) {
-                        next_chunks.push(sub.to_vec());
+                    let mut pos = 0;
+                    while pos < chunk.len() {
+                        let end = (pos + size).min(chunk.len());
+                        next_chunks.push(chunk.slice(pos..end));
+                        pos = end;
                     }
                 }
                 current_chunks = next_chunks;
@@ -198,7 +203,7 @@ impl PDUGenerator {
                     if after_boundary && transformed.len() > 1 {
                         // Expansion occurred after boundary - must re-wrap
                         let total_fec_chunks = transformed.len() as u32;
-                        let (h_orig, _) = match unpack(c) {
+                        let (h_orig, _) = match unpack(c.clone()) {
                             Ok(res) => res,
                             Err(_) => (header_template.clone(), c.clone()),
                         };
