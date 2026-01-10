@@ -14,12 +14,10 @@ fn test_rs_power(n: usize, k: usize, ber: f64, iterations: usize) {
         
         // Inject noise
         let mut noisy = encoded.clone();
-        let mut errors = 0;
         for byte in noisy.iter_mut() {
             for bit in 0..8 {
                 if rng.gen_bool(ber) {
                     *byte ^= 1 << bit;
-                    errors += 1;
                 }
             }
         }

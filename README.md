@@ -26,8 +26,9 @@ hqfbp-rs = { git = "https://github.com/loic-fejoz/hqfbp-rs" }
 ## Usage
 
 ```rust
-use hqfbp_rs::generator::{PDUGenerator, EncValue};
+use hqfbp_rs::generator::{PDUGenerator};
 use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::ContentEncoding;
 
 fn main() -> anyhow::Result<()> {
     // 1. Initialize Generator with complex encodings
@@ -40,13 +41,13 @@ fn main() -> anyhow::Result<()> {
         None, // dst_callsign
         None, // max_payload_size
         Some(vec![
-            EncValue::String("gzip".to_string()),
-            EncValue::String("h".to_string()),
-            EncValue::String("rs(255,233)".to_string()),
+            ContentEncoding::Gzip,
+            ContentEncoding::H,
+            ContentEncoding::ReedSolomon(255, 233),
         ]),
         Some(vec![
-            EncValue::String("h".to_string()),
-            EncValue::String("crc32".to_string()),
+            ContentEncoding::H,
+            ContentEncoding::Crc32,
         ]),
         1, // initial_msg_id
     );

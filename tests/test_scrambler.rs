@@ -1,6 +1,7 @@
 use hqfbp_rs::codec::scr_xor;
-use hqfbp_rs::generator::{PDUGenerator, EncValue};
+use hqfbp_rs::generator::{PDUGenerator};
 use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::ContentEncoding;
 
 #[test]
 fn test_scrambler_roundtrip() {
@@ -29,7 +30,7 @@ fn test_scrambler_whitening() {
     assert!(zero_count < 70);
     
     // And it should have many different values
-    let mut unique_values: std::collections::HashSet<u8> = encoded.iter().cloned().collect();
+    let unique_values: std::collections::HashSet<u8> = encoded.iter().cloned().collect();
     assert!(unique_values.len() > 10);
 }
 
@@ -44,8 +45,8 @@ fn test_generator_deframer_scrambler_integration() {
         Some("SCR-TEST".to_string()),
         None,
         None,
-        Some(vec![EncValue::String(format!("scr(0x{:x})", poly)), EncValue::String("h".to_string())]),
-        Some(vec![EncValue::String("identity".to_string())]),
+        Some(vec![ContentEncoding::Scrambler(poly as u64), ContentEncoding::H]),
+        Some(vec![ContentEncoding::Identity]),
         1,
     );
     

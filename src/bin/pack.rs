@@ -1,6 +1,7 @@
 use anyhow::{Result, Context};
 use clap::{Parser};
-use hqfbp_rs::generator::{PDUGenerator, EncValue};
+use hqfbp_rs::generator::{PDUGenerator};
+use hqfbp_rs::ContentEncoding;
 use std::fs::File;
 use std::io::{Read, Write};
 
@@ -64,7 +65,7 @@ fn encode_kiss_frame(pdu: &[u8]) -> Vec<u8> {
     frame
 }
 
-fn parse_encodings(s: &str) -> Vec<EncValue> {
+fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
     let mut results = Vec::new();
     let mut current = String::new();
     let mut depth = 0;
@@ -87,12 +88,8 @@ fn parse_encodings(s: &str) -> Vec<EncValue> {
     results
 }
 
-fn parse_single_enc(s: &str) -> EncValue {
-    if let Ok(i) = s.parse::<i8>() {
-        EncValue::Integer(i)
-    } else {
-        EncValue::String(s.to_string())
-    }
+fn parse_single_enc(s: &str) -> ContentEncoding {
+    ContentEncoding::try_from(s).unwrap_or(ContentEncoding::OtherString(s.to_string()))
 }
 
 fn main() -> Result<()> {

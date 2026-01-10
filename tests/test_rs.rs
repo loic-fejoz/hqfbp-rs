@@ -17,7 +17,7 @@ mod tests {
             noisy[i] ^= 0xFF; // Injected errors
         }
         
-        let (decoded, corrected) = rs_decode(&noisy, n, k).expect("RS decode failed");
+        let (decoded, _corrected) = rs_decode(&noisy, n, k).expect("Decode failed");
         assert_eq!(decoded.len(), k, "Decoded data length mismatch");
         assert_eq!(decoded, data, "Data recovery failed after 10 errors");
         println!("SUCCESS: RS (120, 100) corrected 10 errors!");

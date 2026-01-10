@@ -1,4 +1,4 @@
-use hqfbp_rs::generator::{PDUGenerator, EncValue};
+use hqfbp_rs::generator::{PDUGenerator};
 use hqfbp_rs::{Header, unpack, ContentEncoding};
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -28,8 +28,8 @@ fn test_generator_single_pdu() {
     assert!(header.content_format.is_none());
     // No encoding, but boundary marker is always present in PDUGenerator
     match header.content_encoding {
-        Some(ContentEncoding::Integer(i)) => assert_eq!(i, -1),
-        _ => panic!("Expected boundary encoding (-1)"),
+        Some(el) => assert!(el.0.iter().any(|e| matches!(e, ContentEncoding::H))),
+        _ => panic!("Expected boundary encoding"),
     }
     assert_eq!(payload, data);
 }
@@ -60,7 +60,7 @@ fn test_generator_single_gzip_pdu() {
         Some("F4JXQ-1".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("gzip".to_string())]),
+        Some(vec![ContentEncoding::Gzip]),
         None,
         1,
     );
@@ -87,7 +87,7 @@ fn test_generator_single_lzma_pdu() {
         Some("F4JXQ-1".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("lzma".to_string())]),
+        Some(vec![ContentEncoding::Lzma]),
         None,
         1,
     );
@@ -102,14 +102,13 @@ fn test_generator_single_lzma_pdu() {
     let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
     
     match header.content_encoding {
-        Some(ContentEncoding::Multiple(v)) => {
-            assert_eq!(v, vec!["lzma".to_string(), "h".to_string()]);
+        Some(el) => {
+            assert_eq!(el.0, vec![ContentEncoding::Lzma, ContentEncoding::H]);
         }
-        _ => panic!("Expected Multiple encoding"),
+        _ => panic!("Expected encoding list"),
     }
     
-    let mut compressed = Vec::new();
-    lzma_rs::lzma_compress(&mut &data[..], &mut compressed).unwrap();
+    let compressed = hqfbp_rs::codec::lzma_compress(&data).unwrap();
     assert_eq!(payload, compressed);
 }
 
@@ -119,7 +118,7 @@ fn test_generator_single_brotli_pdu() {
         Some("F4JXQ-1".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("br".to_string())]),
+        Some(vec![ContentEncoding::Brotli]),
         None,
         1,
     );
@@ -134,10 +133,10 @@ fn test_generator_single_brotli_pdu() {
     let (header, payload) = unpack(&pdus[0]).expect("Unpack failed");
     
     match header.content_encoding {
-        Some(ContentEncoding::Multiple(v)) => {
-            assert_eq!(v, vec!["br".to_string(), "h".to_string()]);
+        Some(el) => {
+            assert_eq!(el.0, vec![ContentEncoding::Brotli, ContentEncoding::H]);
         }
-        _ => panic!("Expected Multiple encoding"),
+        _ => panic!("Expected encoding list"),
     }
     
     let mut decompressed = Vec::new();
@@ -158,7 +157,7 @@ fn test_generator_gzip_before_chunking() {
         Some("F4JXQ".to_string()),
         None,
         Some(50),
-        Some(vec![EncValue::String("gzip".to_string())]),
+        Some(vec![ContentEncoding::Gzip]),
         None,
         1,
     );
@@ -177,7 +176,7 @@ fn test_generator_crc_payload_only() {
         Some("F4JXQ".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("crc32".to_string())]),
+        Some(vec![ContentEncoding::Crc32]),
         None,
         1,
     );
@@ -199,7 +198,7 @@ fn test_generator_crc_covering_header() {
         Some("F4JXQ".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("h".to_string()), EncValue::String("crc32".to_string())]),
+        Some(vec![ContentEncoding::H, ContentEncoding::Crc32]),
         None,
         1,
     );
@@ -216,8 +215,8 @@ fn test_generator_crc_covering_header() {
     let (header, payload) = unpack(pdu_no_crc).expect("Unpack failed");
     assert_eq!(payload, data);
     match header.content_encoding {
-        Some(ContentEncoding::Multiple(v)) => assert_eq!(v, vec!["h".to_string(), "crc32".to_string()]),
-        _ => panic!("Expected Multiple encoding"),
+        Some(el) => assert_eq!(el.0, vec![ContentEncoding::H, ContentEncoding::Crc32]),
+        _ => panic!("Expected encoding list"),
     }
 }
 
@@ -228,8 +227,8 @@ fn test_generator_announcement() {
         Some("F4JXQ".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("gzip".to_string()), EncValue::String("h".to_string()), EncValue::String("crc32".to_string())]),
-        Some(vec![EncValue::String("h".to_string()), EncValue::String("crc16".to_string())]),
+        Some(vec![ContentEncoding::Gzip, ContentEncoding::H, ContentEncoding::Crc32]),
+        Some(vec![ContentEncoding::H, ContentEncoding::Crc16]),
         1,
     );
     
@@ -252,8 +251,8 @@ fn test_generator_announcement() {
     // Announcement referred msg-id is 2
     assert_eq!(ann_header.message_id, Some(2));
     match ann_header.content_encoding {
-        Some(ContentEncoding::Multiple(v)) => assert_eq!(v, vec!["gzip".to_string(), "h".to_string(), "crc32".to_string()]),
-        _ => panic!("Expected Multiple encoding in ann"),
+        Some(el) => assert_eq!(el.0, vec![ContentEncoding::Gzip, ContentEncoding::H, ContentEncoding::Crc32]),
+        _ => panic!("Expected encoding list in ann"),
     }
     
     // 2. Verify Data PDU

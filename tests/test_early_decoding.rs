@@ -1,5 +1,6 @@
 use hqfbp_rs::deframer::{Deframer, Event};
-use hqfbp_rs::generator::{PDUGenerator, EncValue};
+use hqfbp_rs::generator::{PDUGenerator};
+use hqfbp_rs::ContentEncoding;
 
 #[test]
 fn test_deframer_early_rq_decoding() {
@@ -16,8 +17,8 @@ fn test_deframer_early_rq_decoding() {
         Some("EARLY-RQ".to_string()),
         None,
         None,
-        Some(vec![EncValue::String(format!("rq({}, {}, {})", dlen, mtu, repair)), EncValue::String("h".to_string())]),
-        Some(vec![EncValue::String("identity".to_string())]),
+        Some(vec![ContentEncoding::RaptorQ(dlen, mtu, repair), ContentEncoding::H]),
+        Some(vec![ContentEncoding::Identity]),
         1,
     );
     
@@ -60,8 +61,8 @@ fn test_deframer_early_rq_with_loss() {
         Some("RQ-LOSS".to_string()),
         None,
         None,
-        Some(vec![EncValue::String(format!("rq({}, {}, {})", dlen, mtu, repair)), EncValue::String("h".to_string())]),
-        Some(vec![EncValue::String("identity".to_string())]),
+        Some(vec![ContentEncoding::RaptorQ(dlen, mtu, repair), ContentEncoding::H]),
+        Some(vec![ContentEncoding::Identity]),
         1,
     );
     
@@ -102,8 +103,8 @@ fn test_deframer_rq_wait_for_enough_symbols() {
         Some("RQ-WAIT".to_string()),
         None,
         None,
-        Some(vec![EncValue::String(format!("rq({}, {}, {})", dlen, mtu, repair)), EncValue::String("h".to_string())]),
-        Some(vec![EncValue::String("identity".to_string())]),
+        Some(vec![ContentEncoding::RaptorQ(dlen, mtu, repair), ContentEncoding::H]),
+        Some(vec![ContentEncoding::Identity]),
         1,
     );
     

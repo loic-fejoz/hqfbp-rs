@@ -1,6 +1,7 @@
 use hqfbp_rs::codec::{rq_encode, rq_decode};
-use hqfbp_rs::generator::{PDUGenerator, EncValue};
+use hqfbp_rs::generator::{PDUGenerator};
 use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::ContentEncoding;
 
 #[test]
 fn test_rq_basic_encode_decode() {
@@ -53,8 +54,8 @@ fn test_generator_deframer_rq_post_boundary() {
         Some("F4JXQ".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("h".to_string()), EncValue::String(format!("rq({}, {}, {})", rq_len, mtu, repair_count))]),
-        Some(vec![EncValue::String("identity".to_string())]),
+        Some(vec![ContentEncoding::H, ContentEncoding::RaptorQ(rq_len, mtu, repair_count)]),
+        Some(vec![ContentEncoding::Identity]),
         1,
     );
     

@@ -1,5 +1,6 @@
 use minicbor::{Encode, Decode, Decoder, Encoder};
 use anyhow::{Result, anyhow, bail};
+use regex::Regex;
 use std::collections::HashMap;
 use lazy_static::lazy_static;
 
@@ -15,7 +16,7 @@ pub struct Header {
     #[n(2)] pub dst_callsign: Option<String>,
     #[n(3)] pub content_format: Option<u16>,
     #[n(4)] pub content_type: Option<String>,
-    #[n(5)] pub content_encoding: Option<ContentEncoding>,
+    #[n(5)] pub content_encoding: Option<EncodingList>,
     #[n(6)] pub repr_digest: Option<Vec<u8>>,
     #[n(7)] pub content_digest: Option<Vec<u8>>,
     #[n(8)] pub file_size: Option<u64>,
@@ -76,13 +77,11 @@ impl Header {
         if let Some(ct) = final_ct { m.insert("Content-Type".to_string(), ct.into()); }
 
         if let Some(ce) = self.content_encoding {
-            match ce {
-                ContentEncoding::Single(s) => { m.insert("Content-Encoding".to_string(), s.into()); }
-                ContentEncoding::Multiple(v) => { m.insert("Content-Encoding".to_string(), v.into()); }
-                ContentEncoding::Integer(i) => {
-                    let s = ENCODING_REGISTRY.get(&i).map(|&s| s.to_string()).unwrap_or_else(|| i.to_string());
-                    m.insert("Content-Encoding".to_string(), s.into());
-                }
+            let list: Vec<serde_json::Value> = ce.0.iter().map(|e| e.to_string().into()).collect();
+            if list.len() == 1 {
+                m.insert("Content-Encoding".to_string(), list[0].clone());
+            } else {
+                m.insert("Content-Encoding".to_string(), list.into());
             }
         }
         
@@ -98,24 +97,138 @@ impl Header {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ContentEncoding {
-    Single(String),
-    Multiple(Vec<String>),
-    Integer(i8),
+lazy_static! {
+    static ref RS_RE: Regex = Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap();
+    static ref RQ_RE: Regex = Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap();
+    static ref CONV_RE: Regex = Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap();
+    static ref SCR_RE: Regex = Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap();
+    static ref CHUNK_RE: Regex = Regex::new(r"chunk\((\d+)\)").unwrap();
+    static ref REPEAT_RE: Regex = Regex::new(r"repeat\((\d+)\)").unwrap();
 }
 
-// Custom encoding/decoding for ContentEncoding as it can be int, string or array
-impl<'b, C> Decode<'b, C> for ContentEncoding {
+#[derive(Debug, Clone, PartialEq)]
+pub enum ContentEncoding {
+    H,
+    Identity,
+    Gzip,
+    Deflate,
+    Brotli,
+    Lzma,
+    Crc16,
+    Crc32,
+    ReedSolomon(usize, usize),
+    RaptorQ(usize, u16, u32),
+    Conv(usize, String),
+    Scrambler(u64),
+    Chunk(usize),
+    Repeat(usize),
+    OtherString(String),
+    OtherInteger(i8),
+}
+
+impl std::fmt::Display for ContentEncoding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ContentEncoding::H => write!(f, "h"),
+            ContentEncoding::Identity => write!(f, "identity"),
+            ContentEncoding::Gzip => write!(f, "gzip"),
+            ContentEncoding::Deflate => write!(f, "deflate"),
+            ContentEncoding::Brotli => write!(f, "br"),
+            ContentEncoding::Lzma => write!(f, "lzma"),
+            ContentEncoding::Crc16 => write!(f, "crc16"),
+            ContentEncoding::Crc32 => write!(f, "crc32"),
+            ContentEncoding::ReedSolomon(n, k) => write!(f, "rs({},{})", n, k),
+            ContentEncoding::RaptorQ(len, mtu, rep) => write!(f, "rq({},{},{})", len, mtu, rep),
+            ContentEncoding::Conv(k, r) => write!(f, "conv({},{})", k, r),
+            ContentEncoding::Scrambler(p) => write!(f, "scr(0x{:x})", p),
+            ContentEncoding::Chunk(s) => write!(f, "chunk({})", s),
+            ContentEncoding::Repeat(n) => write!(f, "repeat({})", n),
+            ContentEncoding::OtherString(s) => write!(f, "{}", s),
+            ContentEncoding::OtherInteger(i) => write!(f, "{}", i),
+        }
+    }
+}
+
+impl TryFrom<&str> for ContentEncoding {
+    type Error = anyhow::Error;
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        if s == "h" || s == "-1" { Ok(ContentEncoding::H) }
+        else if s == "identity" || s == "0" { Ok(ContentEncoding::Identity) }
+        else if s == "gzip" || s == "1" { Ok(ContentEncoding::Gzip) }
+        else if s == "deflate" || s == "2" { Ok(ContentEncoding::Deflate) }
+        else if s == "br" || s == "3" { Ok(ContentEncoding::Brotli) }
+        else if s == "lzma" || s == "4" { Ok(ContentEncoding::Lzma) }
+        else if s == "crc16" || s == "5" { Ok(ContentEncoding::Crc16) }
+        else if s == "crc32" || s == "6" { Ok(ContentEncoding::Crc32) }
+        else if let Some(m) = RS_RE.captures(s) {
+            Ok(ContentEncoding::ReedSolomon(m[1].parse()?, m[2].parse()?))
+        } else if let Some(m) = RQ_RE.captures(s) {
+            Ok(ContentEncoding::RaptorQ(m[1].parse()?, m[2].parse()?, m[3].parse()?))
+        } else if let Some(m) = CONV_RE.captures(s) {
+            Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
+        } else if let Some(m) = SCR_RE.captures(s) {
+            let ps = &m[1];
+            let p = if ps.starts_with("0x") { u64::from_str_radix(&ps[2..], 16)? } else { ps.parse()? };
+            Ok(ContentEncoding::Scrambler(p))
+        } else if let Some(m) = CHUNK_RE.captures(s) {
+            Ok(ContentEncoding::Chunk(m[1].parse()?))
+        } else if let Some(m) = REPEAT_RE.captures(s) {
+            Ok(ContentEncoding::Repeat(m[1].parse()?))
+        } else {
+            Ok(ContentEncoding::OtherString(s.to_string()))
+        }
+    }
+}
+
+impl TryFrom<i8> for ContentEncoding {
+    type Error = anyhow::Error;
+    fn try_from(i: i8) -> Result<Self, Self::Error> {
+        match i {
+            -1 => Ok(ContentEncoding::H),
+            0 => Ok(ContentEncoding::Identity),
+            1 => Ok(ContentEncoding::Gzip),
+            2 => Ok(ContentEncoding::Deflate),
+            3 => Ok(ContentEncoding::Brotli),
+            4 => Ok(ContentEncoding::Lzma),
+            5 => Ok(ContentEncoding::Crc16),
+            6 => Ok(ContentEncoding::Crc32),
+            _ => Ok(ContentEncoding::OtherInteger(i)),
+        }
+    }
+}
+
+impl From<ContentEncoding> for i8 {
+    fn from(val: ContentEncoding) -> Self {
+        match val {
+            ContentEncoding::H => -1,
+            ContentEncoding::Identity => 0,
+            ContentEncoding::Gzip => 1,
+            ContentEncoding::Deflate => 2,
+            ContentEncoding::Brotli => 3,
+            ContentEncoding::Lzma => 4,
+            ContentEncoding::Crc16 => 5,
+            ContentEncoding::Crc32 => 6,
+            ContentEncoding::OtherInteger(i) => i,
+            _ => 127, // Fallback for complex ones that don't have an ID
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EncodingList(pub Vec<ContentEncoding>);
+
+impl<'b, C> Decode<'b, C> for EncodingList {
     fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
         match d.datatype()? {
             minicbor::data::Type::U8 | minicbor::data::Type::U16 | minicbor::data::Type::U32 | minicbor::data::Type::U64 |
             minicbor::data::Type::I8 | minicbor::data::Type::I16 | minicbor::data::Type::I32 | minicbor::data::Type::I64 |
             minicbor::data::Type::Int => {
-                Ok(ContentEncoding::Integer(d.i8()?))
+                let i = d.i8()?;
+                Ok(EncodingList(vec![ContentEncoding::try_from(i).map_err(|_| minicbor::decode::Error::message("invalid enum"))?]))
             }
             minicbor::data::Type::String => {
-                Ok(ContentEncoding::Single(d.str()?.to_string()))
+                let s = d.str()?;
+                Ok(EncodingList(vec![ContentEncoding::try_from(s).map_err(|_| minicbor::decode::Error::message("invalid string"))?]))
             }
             minicbor::data::Type::Array => {
                 let mut v = Vec::new();
@@ -126,49 +239,43 @@ impl<'b, C> Decode<'b, C> for ContentEncoding {
                         minicbor::data::Type::I8 | minicbor::data::Type::I16 | minicbor::data::Type::I32 | minicbor::data::Type::I64 |
                         minicbor::data::Type::Int => {
                             let i = d.i8()?;
-                            v.push(ENCODING_REGISTRY.get(&i).copied().unwrap_or("unknown").to_string());
+                            v.push(ContentEncoding::try_from(i).map_err(|_| minicbor::decode::Error::message("invalid enum"))?);
                         }
                         _ => {
                             let s = d.str()?;
-                            v.push(s.to_string());
+                            v.push(ContentEncoding::try_from(s).map_err(|_| minicbor::decode::Error::message("invalid string"))?);
                         }
                     }
                 }
-                Ok(ContentEncoding::Multiple(v))
+                Ok(EncodingList(v))
             }
             _ => Err(minicbor::decode::Error::type_mismatch(minicbor::data::Type::String)),
         }
     }
 }
 
-impl<C> Encode<C> for ContentEncoding {
+impl<C> Encode<C> for EncodingList {
     fn encode<W: minicbor::encode::Write>(&self, e: &mut Encoder<W>, _ctx: &mut C) -> Result<(), minicbor::encode::Error<W::Error>> {
-        match self {
-            ContentEncoding::Integer(i) => { e.i8(*i)?; }
-            ContentEncoding::Single(s) => {
-                if let Some(&i) = REV_ENCODING_REGISTRY.get(s.as_str()) {
-                    e.i8(i)?;
-                } else {
-                    e.str(s)?;
-                }
-            }
-            ContentEncoding::Multiple(v) => {
-                if v.len() == 1 {
-                    let s = &v[0];
-                    if let Some(&i) = REV_ENCODING_REGISTRY.get(s.as_str()) {
+        if self.0.len() == 1 {
+            match &self.0[0] {
+                ContentEncoding::OtherString(s) => { e.str(s)?; }
+                other => {
+                    let i: i8 = other.clone().into();
+                    if i != 127 {
                         e.i8(i)?;
                     } else {
-                        e.str(s)?;
+                        e.str(&other.to_string())?;
                     }
+                }
+            }
+        } else {
+            e.array(self.0.len() as u64)?;
+            for item in &self.0 {
+                let i: i8 = item.clone().into();
+                if i != 127 {
+                    e.i8(i)?;
                 } else {
-                    e.array(v.len() as u64)?;
-                    for s in v {
-                        if let Some(&i) = REV_ENCODING_REGISTRY.get(s.as_str()) {
-                            e.i8(i)?;
-                        } else {
-                            e.str(s)?;
-                        }
-                    }
+                    e.str(&item.to_string())?;
                 }
             }
         }
@@ -219,6 +326,9 @@ pub fn unpack(data: &[u8]) -> Result<(Header, Vec<u8>)> {
             bail!("Header decode failed: {}", e);
         }
     };
+    if header.message_id.is_none() && header.content_type.as_deref() != Some("application/vnd.hqfbp+cbor") {
+        bail!("Decoded header is missing identifying fields (message_id or content_type)");
+    }
     let pos = decoder.position();
     let payload = data[pos..].to_vec();
     

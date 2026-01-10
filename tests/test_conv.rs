@@ -1,6 +1,7 @@
 use hqfbp_rs::codec::{conv_encode, conv_decode};
-use hqfbp_rs::generator::{PDUGenerator, EncValue};
-use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::generator::{PDUGenerator};
+use hqfbp_rs::deframer::Deframer;
+use hqfbp_rs::ContentEncoding;
 
 #[test]
 fn test_conv_roundtrip() {
@@ -47,8 +48,8 @@ fn test_generator_deframer_conv_integration() {
         Some("CONV-TEST".to_string()),
         None,
         None,
-        Some(vec![EncValue::String("conv(7,1/2)".to_string()), EncValue::Integer(-1)]),
-        Some(vec![EncValue::String("identity".to_string())]),
+        Some(vec![ContentEncoding::Conv(7, "1/2".to_string()), ContentEncoding::H]),
+        Some(vec![ContentEncoding::Identity]),
         1,
     );
     

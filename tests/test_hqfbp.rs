@@ -1,5 +1,4 @@
-use hqfbp_rs::{Header, pack, unpack, ContentEncoding, get_coap_id};
-use std::collections::HashMap;
+use hqfbp_rs::{Header, pack, unpack, ContentEncoding, EncodingList, get_coap_id};
 
 #[test]
 fn test_simple_pack_unpack() {
@@ -97,7 +96,7 @@ fn test_content_encoding_optimization() {
     
     let header = Header {
         message_id: Some(1),
-        content_encoding: Some(ContentEncoding::Single("gzip".to_string())),
+        content_encoding: Some(EncodingList(vec![ContentEncoding::Gzip])),
         ..Default::default()
     };
     
@@ -109,11 +108,8 @@ fn test_content_encoding_optimization() {
     // My Decode implementation for ContentEncoding maps Integers back to Strings in Multiple, but what about Single?
     // Let's check lib.rs Decode for ContentEncoding.
     
-    if let Some(ce) = dec_h.content_encoding {
-        match ce {
-            ContentEncoding::Integer(i) => assert_eq!(i, 1),
-            _ => panic!("Expected Integer(1) for gzip, got {:?}", ce),
-        }
+    if let Some(el) = dec_h.content_encoding {
+        assert_eq!(el.0, vec![ContentEncoding::Gzip]);
     } else {
         panic!("Missing Content-Encoding");
     }
@@ -134,7 +130,7 @@ fn test_human_readable() {
         message_id: Some(1001),
         src_callsign: Some("FOSM-1".to_string()),
         content_format: Some(23), // image/png
-        content_encoding: Some(ContentEncoding::Multiple(vec!["gzip".to_string(), "h".to_string(), "rs(255,233)".to_string()])),
+        content_encoding: Some(EncodingList(vec![ContentEncoding::Gzip, ContentEncoding::H, ContentEncoding::ReedSolomon(255, 233)])),
         file_size: Some(4032),
         ..Default::default()
     };
@@ -160,16 +156,12 @@ fn test_pack_optimization() {
     assert_eq!(h1.content_type, None);
     
     // 2. Content-Encoding strings to ints
-    let p2 = pack(&Header { message_id: Some(2), content_encoding: Some(ContentEncoding::Multiple(vec!["gzip".to_string(), "h".to_string()])), ..Default::default() }, b"gzdata").unwrap();
+    let p2 = pack(&Header { message_id: Some(2), content_encoding: Some(EncodingList(vec![ContentEncoding::Gzip, ContentEncoding::H])), ..Default::default() }, b"gzdata").unwrap();
     let (h2, _) = unpack(&p2).unwrap();
     match h2.content_encoding.unwrap() {
-        ContentEncoding::Multiple(v) => {
-            // Wait, my Decode implementation maps integers back to strings in Multiple!
-            // match dt { ... Type::Int => { let i = d.i8()?; v.push(ENCODING_REGISTRY.get(&i)...) } }
-            // So h2.content_encoding should be Multiple(["gzip", "h"])
-            assert_eq!(v, vec!["gzip", "h"]);
+        el => {
+            assert_eq!(el.0, vec![ContentEncoding::Gzip, ContentEncoding::H]);
         }
-        _ => panic!("Expected Multiple"),
     }
     
     // 3. Omit default Content-Format 0

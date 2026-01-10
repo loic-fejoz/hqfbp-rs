@@ -1,18 +1,8 @@
 use anyhow::{Result, bail};
 use std::collections::{HashMap, VecDeque};
-use crate::{Header, unpack, ContentEncoding};
+use crate::{Header, unpack, ContentEncoding, EncodingList};
 use crate::codec::*;
-use regex::Regex;
-use lazy_static::lazy_static;
-
-lazy_static! {
-    static ref RS_RE: Regex = Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap();
-    static ref RQ_RE: Regex = Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap();
-    static ref CONV_RE: Regex = Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap();
-    static ref SCR_RE: Regex = Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap();
-    static ref CHUNK_RE: Regex = Regex::new(r"chunk\((\d+)\)").unwrap();
-    static ref REPEAT_RE: Regex = Regex::new(r"repeat\((\d+)\)").unwrap();
-}
+// Regexes moved to lib.rs
 
 #[derive(Debug, Clone)]
 pub struct PDUEvent {
@@ -35,7 +25,7 @@ pub enum Event {
 pub struct Deframer {
     events: VecDeque<Event>,
     sessions: HashMap<(Option<String>, u32), Session>,
-    announcements: HashMap<(Option<String>, u32), Vec<String>>,
+    announcements: HashMap<(Option<String>, u32), Vec<ContentEncoding>>,
     not_yet_decoded: Vec<Vec<u8>>,
 }
 
@@ -43,26 +33,19 @@ struct Session {
     chunks: HashMap<u32, (Vec<u8>, usize)>, // chunk_id -> (payload, quality)
     headers: Vec<Header>,
     total_chunks: u32,
+    _encodings: Option<Vec<ContentEncoding>>,
 }
 
-fn ce_to_list(ce: &ContentEncoding) -> Vec<String> {
-    match ce {
-        ContentEncoding::Single(s) => vec![s.clone()],
-        ContentEncoding::Multiple(v) => v.clone(),
-        ContentEncoding::Integer(i) => vec![crate::ENCODING_REGISTRY.get(i).copied().unwrap_or("unknown").to_string()],
-    }
+fn ce_to_list(ce: &EncodingList) -> Vec<ContentEncoding> {
+    ce.0.clone()
 }
 
 fn get_rq_info(headers: &[Header]) -> Option<(usize, u16, u32)> {
     for h in headers {
         if let Some(ce) = &h.content_encoding {
-            let ice = ce_to_list(ce);
-            for enc in ice {
-                if let Some(m) = RQ_RE.captures(&enc) {
-                    let rq_len: usize = m[1].parse().ok()?;
-                    let mtu: u16 = m[2].parse().ok()?;
-                    let repairs: u32 = m[3].parse().ok()?;
-                    return Some((rq_len, mtu, repairs));
+            for enc in &ce.0 {
+                if let ContentEncoding::RaptorQ(rq_len, mtu, repairs) = enc {
+                    return Some((*rq_len, *mtu, *repairs));
                 }
             }
         }
@@ -84,41 +67,86 @@ impl Deframer {
         let peek_unpack = unpack(data);
         let mut header: Option<Header> = None;
         let mut payload: Option<Vec<u8>> = None;
-        let mut encodings: Option<Vec<String>> = None;
+        let mut encodings: Option<Vec<ContentEncoding>> = None;
         let mut pdu_quality = 0;
+
+        // Phase 0: Fast path for announcements
+        if let Ok((h, _p)) = &peek_unpack {
+            // Phase 0: Fast path for announcements
+            if h.content_type.as_deref() == Some("application/vnd.hqfbp+cbor") {
+                let ce_list = h.content_encoding.as_ref().map(ce_to_list).unwrap_or_default();
+                let (pre, post, has_h) = self.split_encs(&ce_list);
+                let pdu_level = if has_h { &post } else { &ce_list };
+                if let Ok((p2, _)) = self.apply_decodings(data.to_vec(), pdu_level) {
+                   if let Ok((_p3, _)) = self.apply_decodings(p2.clone(), &pre) {
+                       // Note: p3 is the decoded inner content. If it's an announcement, p3 is the serialized Header.
+                       // But wait, apply_decodings on the WHOLE PDU returns the whole PDU decoded.
+                       // We need to unpack p2 to get the payload if we want p3 to be the message.
+                       if let Ok((h2, p2_payload)) = unpack(&p2) {
+                           if let Ok((p3_payload, _)) = self.apply_decodings(p2_payload, &pre) {
+                       self.handle_announcement(h2.src_callsign.clone(), &p3_payload);
+                       self.events.push_back(Event::PDU(PDUEvent { header: h2, payload: p3_payload }));
+                               return;
+                           }
+                       }
+                   }
+                }
+            }
+        }
 
         // Phase 1: Direct lookup if header is readable and we have an announcement
         if let Ok((h, p)) = &peek_unpack {
-            let src_callsign = h.src_callsign.clone();
-            let msg_id = h.original_message_id.or(h.message_id);
-            
-            if let Some(mid) = msg_id {
-                let key = (src_callsign.clone(), mid);
-                if let Some(ann_encs) = self.announcements.get(&key) {
-                    if let Ok((recovered_data, quality)) = self.strip_post_boundary(data, ann_encs) {
-                        if let Ok((h2, p2)) = unpack(&recovered_data) {
+            if h.content_type.as_deref() == Some("application/vnd.hqfbp+cbor") {
+                header = Some(h.clone());
+                payload = Some(p.clone());
+                if let Some(ce) = &h.content_encoding {
+                    encodings = Some(ce_to_list(ce));
+                }
+            } else {
+                let src_callsign = h.src_callsign.clone();
+                let msg_id = h.original_message_id.or(h.message_id);
+                
+                if let Some(mid) = msg_id {
+                    let key = (src_callsign.clone(), mid);
+                    if let Some(ann_encs) = self.announcements.get(&key) {
+                    if let Ok((recovered_pdu, quality)) = self.strip_post_boundary(data, ann_encs) {
+                        if let Ok((h2, p2)) = unpack(&recovered_pdu) {
                             header = Some(h2);
                             payload = Some(p2);
                             pdu_quality = quality;
                             encodings = Some(ann_encs.clone());
+                        } else {
+                            // Valid header + valid announcement -> Accept chunk
+                            // But wait, if strip_post_boundary on full PDU succeeded, it MUST be an unpackable PDU or raw data.
+                            header = Some(h.clone());
+                            payload = Some(recovered_pdu); 
+                            pdu_quality = quality;
+                            encodings = Some(ann_encs.clone());
                         }
                     }
-                } else if let Some(ce) = &h.content_encoding {
-                    // No announcement, but header has encodings list
-                    let ice = ce_to_list(ce);
-                    if let Ok((recovered_data, quality)) = self.strip_post_boundary(data, &ice) {
-                        if let Ok((h2, p2)) = unpack(&recovered_data) {
-                            header = Some(h2);
-                            payload = Some(p2);
-                            pdu_quality = quality;
+                    } else if let Some(ce) = &h.content_encoding {
+                        // No announcement, but header has encodings list
+                        let ice = ce_to_list(ce);
+                        if let Ok((recovered_pdu, quality)) = self.strip_post_boundary(data, &ice) {
+                            if let Ok((h2, p2)) = unpack(&recovered_pdu) {
+                                header = Some(h2);
+                                payload = Some(p2);
+                                pdu_quality = quality;
+                                encodings = Some(ice.clone());
+                            } else {
+                                // Valid header + multi-PDU expansion in header -> Accept chunk
+                                header = Some(h.clone());
+                                payload = Some(recovered_pdu);
+                                pdu_quality = quality;
+                                encodings = Some(ice.clone());
+                            }
+                        } else {
+                            // strip_post_boundary failed, but maybe the raw payload is okay?
+                            header = Some(h.clone());
+                            payload = Some(p.clone());
                             encodings = Some(ice);
+                            pdu_quality = 0;
                         }
-                    } else {
-                        // strip_post_boundary failed, but maybe the raw payload is okay?
-                        header = Some(h.clone());
-                        payload = Some(p.clone());
-                        encodings = Some(ice);
-                        pdu_quality = 0;
                     }
                 }
             }
@@ -138,13 +166,14 @@ impl Deframer {
                         if let Ok((mut h2, p2)) = unpack(&recovered_data) {
                             // Strip the post-boundary encodings we just applied from the header
                             if let Some(ce) = &mut h2.content_encoding {
-                                let (pre, _, _) = self.split_encs(&ce_to_list(ce));
-                                if pre.len() == 1 {
-                                    h2.content_encoding = Some(ContentEncoding::Single(pre[0].clone()));
-                                } else if pre.is_empty() {
+                                let pre = ce.0.iter()
+                                    .filter(|e| !matches!(e, ContentEncoding::H) && !matches!(e, ContentEncoding::Chunk(_)) && !matches!(e, ContentEncoding::Repeat(_)))
+                                    .cloned()
+                                    .collect::<Vec<_>>();
+                                if pre.is_empty() {
                                     h2.content_encoding = None;
                                 } else {
-                                    h2.content_encoding = Some(ContentEncoding::Multiple(pre));
+                                    h2.content_encoding = Some(EncodingList(pre));
                                 }
                             }
                             header = Some(h2);
@@ -170,10 +199,10 @@ impl Deframer {
         }
 
         if header.is_none() || payload.is_none() {
-            if let Ok((h, p)) = peek_unpack {
-                header = Some(h);
-                payload = Some(p);
-            }
+        if let Ok((h, p)) = &peek_unpack {
+            header = Some(h.clone());
+            payload = Some(p.clone());
+        }
         }
 
         let Some(header) = header else {
@@ -190,23 +219,6 @@ impl Deframer {
 
         let src_callsign = header.src_callsign.clone();
 
-        if let Some(ct) = &header.content_type {
-            if ct == "application/vnd.hqfbp+cbor" {
-                if let Some(ce) = &header.content_encoding {
-                    let ice = ce_to_list(ce);
-                    let (pre, _, _) = self.split_encs(&ice);
-                    if let Ok((p2, _)) = self.apply_decodings(payload.clone(), &pre) {
-                        self.handle_announcement(src_callsign.clone(), &p2);
-                        self.events.push_back(Event::PDU(PDUEvent { header: header.clone(), payload: p2 }));
-                        return;
-                    }
-                } else {
-                    self.handle_announcement(src_callsign, &payload);
-                    self.events.push_back(Event::PDU(PDUEvent { header: header.clone(), payload: payload.clone() }));
-                    return;
-                }
-            }
-        }
 
         self.events.push_back(Event::PDU(PDUEvent { header: header.clone(), payload: payload.clone() }));
 
@@ -218,13 +230,9 @@ impl Deframer {
         let mut final_payload = payload;
 
         if let Some(ce) = &encodings {
-            let (pre, _, _) = self.split_encs(ce);
-            let last_split = pre.iter().rposition(|e| CHUNK_RE.is_match(e) || REPEAT_RE.is_match(e) || RQ_RE.is_match(e));
-            let per_pdu = match last_split {
-                Some(idx) => &pre[idx+1..],
-                None => &pre[..],
-            };
-            if let Ok((p2, q)) = self.apply_decodings(final_payload.clone(), per_pdu) {
+            let (_, post, has_h) = self.split_encs(ce);
+            let pdu_level = if has_h { &post } else { ce };
+            if let Ok((p2, q)) = self.apply_decodings(final_payload.clone(), pdu_level) {
                 final_payload = p2;
                 final_pdu_quality += q;
             }
@@ -234,6 +242,7 @@ impl Deframer {
             chunks: HashMap::new(),
             headers: Vec::new(),
             total_chunks,
+            _encodings: encodings.clone(),
         });
 
         let existing = session.chunks.get(&chunk_id);
@@ -269,113 +278,107 @@ impl Deframer {
         }
     }
 
-    fn split_encs(&self, encs: &[String]) -> (Vec<String>, Vec<String>, bool) {
-        if let Some(pos) = encs.iter().position(|e| e == "h" || e == "-1") {
+    fn split_encs(&self, encs: &[ContentEncoding]) -> (Vec<ContentEncoding>, Vec<ContentEncoding>, bool) {
+        if let Some(pos) = encs.iter().position(|e| matches!(e, ContentEncoding::H)) {
             (encs[..pos].to_vec(), encs[pos+1..].to_vec(), true)
         } else {
             (encs.to_vec(), Vec::new(), false)
         }
     }
 
-    fn raptorq_is_post_boundary(&self, encs: &[String]) -> bool {
-        if let Some(pos) = encs.iter().position(|e| e == "h" || e == "-1") {
-            encs[pos+1..].iter().any(|e| RQ_RE.is_match(e))
+    fn raptorq_is_post_boundary(&self, encs: &[ContentEncoding]) -> bool {
+        if let Some(pos) = encs.iter().position(|e| matches!(e, ContentEncoding::H)) {
+            encs[pos+1..].iter().any(|e| matches!(e, ContentEncoding::RaptorQ(_, _, _)))
         } else {
             false
         }
     }
 
-    fn strip_post_boundary(&self, data: &[u8], encs: &[String]) -> Result<(Vec<u8>, usize)> {
+    fn strip_post_boundary(&self, data: &[u8], encs: &[ContentEncoding]) -> Result<(Vec<u8>, usize)> {
         let (_, post, _) = self.split_encs(encs);
         self.apply_decodings(data.to_vec(), &post)
     }
 
-    fn apply_decodings(&self, mut data: Vec<u8>, encs: &[String]) -> Result<(Vec<u8>, usize)> {
+    fn apply_decodings(&self, mut data: Vec<u8>, encs: &[ContentEncoding]) -> Result<(Vec<u8>, usize)> {
         let mut quality = 0;
         for enc in encs.iter().rev() {
-            if enc == "gzip" || enc == "1" { data = gzip_decompress(&data)?; }
-            else if enc == "br" || enc == "3" { data = brotli_decompress(&data)?; }
-            else if enc == "lzma" || enc == "4" { data = lzma_decompress(&data)?; }
-            else if enc == "crc16" || enc == "5" {
-                if data.len() < 2 { bail!("too short for crc16"); }
-                let payload = &data[..data.len()-2];
-                let expected = &data[data.len()-2..];
-                if crc16_ccitt(payload) != expected { bail!("crc16 fail"); }
-                data = payload.to_vec();
-                quality += 1000;
-            }
-            else if enc == "crc32" || enc == "6" {
-                if data.len() < 4 { bail!("too short for crc32"); }
-                let payload = &data[..data.len()-4];
-                let expected = &data[data.len()-4..];
-                if crc32_std(payload) != expected { bail!("crc32 fail"); }
-                data = payload.to_vec();
-                quality += 1000;
-            }
-            else if let Some(m) = RS_RE.captures(enc) {
-                let n: usize = m[1].parse()?;
-                let k: usize = m[2].parse()?;
-                let (d2, corrected) = rs_decode(&data, n, k)?;
-                data = d2;
-                let num_blocks = data.len() / k;
-                let max_correctable = ((n - k) / 2) * num_blocks;
-                quality += max_correctable.saturating_sub(corrected);
-            }
-            else if let Some(m) = RQ_RE.captures(enc) {
-                let rq_len: usize = m[1].parse()?;
-                let mtu: u16 = m[2].parse()?;
-                data = rq_decode(vec![data], rq_len, mtu)?;
-                quality += 10;
-            }
-            else if let Some(m) = CONV_RE.captures(enc) {
-                let k_val: usize = m[1].parse()?;
-                let rate = &m[2];
-                let (d2, metric) = conv_decode(&data, k_val, rate)?;
-                data = d2;
-                quality += (data.len() * 8).saturating_sub(metric);
-            }
-            else if let Some(m) = SCR_RE.captures(enc) {
-                let poly_str = &m[1];
-                let poly = if poly_str.starts_with("0x") { u64::from_str_radix(&poly_str[2..], 16)? } else { poly_str.parse()? };
-                data = scr_xor(&data, poly);
+            match enc {
+                ContentEncoding::Gzip => {
+                    data = gzip_decompress(&data)?;
+                }
+                ContentEncoding::Brotli => data = brotli_decompress(&data)?,
+                ContentEncoding::Lzma => data = lzma_decompress(&data)?,
+                ContentEncoding::Crc16 => {
+                    if data.len() < 2 { bail!("too short for crc16"); }
+                    let payload = &data[..data.len()-2];
+                    let expected = &data[data.len()-2..];
+                    if crc16_ccitt(payload) != expected { bail!("crc16 fail"); }
+                    data = payload.to_vec();
+                    quality += 1000;
+                }
+                ContentEncoding::Crc32 => {
+                    if data.len() < 4 { bail!("too short for crc32"); }
+                    let payload = &data[..data.len()-4];
+                    let expected = &data[data.len()-4..];
+                    if crc32_std(payload) != expected { bail!("crc32 fail"); }
+                    data = payload.to_vec();
+                    quality += 1000;
+                }
+                ContentEncoding::ReedSolomon(n, k) => {
+                    let (d2, corrected) = rs_decode(&data, *n, *k)?;
+                    data = d2;
+                    let num_blocks = data.len() / k;
+                    let max_correctable = ((n - k) / 2) * num_blocks;
+                    quality += max_correctable.saturating_sub(corrected);
+                }
+                ContentEncoding::RaptorQ(_, _, _) | ContentEncoding::Chunk(_) | ContentEncoding::Repeat(_) => {
+                    // These are multi-PDU or handled during reassembly
+                }
+                ContentEncoding::Conv(k_val, rate) => {
+                    let (d2, metric) = conv_decode(&data, *k_val, rate)?;
+                    data = d2;
+                    quality += (data.len() * 8).saturating_sub(metric);
+                }
+                ContentEncoding::Scrambler(poly) => {
+                    data = scr_xor(&data, *poly);
+                }
+                _ => {}
             }
         }
         Ok((data, quality))
     }
 
-    fn strip_post_boundary_multi(&self, data: &[Vec<u8>], encs: &[String]) -> Result<(Vec<u8>, usize)> {
+    fn strip_post_boundary_multi(&self, data: &[Vec<u8>], encs: &[ContentEncoding]) -> Result<(Vec<u8>, usize)> {
         let (_, post, _) = self.split_encs(encs);
         self.apply_decodings_multi(data.to_vec(), &post)
     }
 
-    fn apply_decodings_multi(&self, packets: Vec<Vec<u8>>, encs: &[String]) -> Result<(Vec<u8>, usize)> {
+    fn apply_decodings_multi(&self, packets: Vec<Vec<u8>>, encs: &[ContentEncoding]) -> Result<(Vec<u8>, usize)> {
         let mut quality = 0;
         let mut data = Vec::new();
         let mut first = true;
 
         for enc in encs.iter().rev() {
-            if enc == "gzip" || enc == "1" || enc == "br" || enc == "3" || enc == "lzma" || enc == "4" || 
-               enc == "crc16" || enc == "5" || enc == "crc32" || enc == "6" || RS_RE.is_match(enc) || 
-               CONV_RE.is_match(enc) || SCR_RE.is_match(enc) {
-                // These expect a single contiguous buffer
-                if first {
-                    data = packets.concat();
-                    first = false;
+            match enc {
+                ContentEncoding::RaptorQ(rq_len, mtu, _) => {
+                    if first {
+                        data = rq_decode(packets.clone(), *rq_len, *mtu)?;
+                        first = false;
+                    } else {
+                        data = rq_decode(vec![data], *rq_len, *mtu)?;
+                    }
+                    quality += 10;
                 }
-                let (d2, q) = self.apply_decodings(data, &[enc.clone()])?;
-                data = d2;
-                quality += q;
-            }
-            else if let Some(m) = RQ_RE.captures(enc) {
-                let rq_len: usize = m[1].parse()?;
-                let mtu: u16 = m[2].parse()?;
-                if first {
-                    data = rq_decode(packets.clone(), rq_len, mtu)?;
-                    first = false;
-                } else {
-                    data = rq_decode(vec![data], rq_len, mtu)?;
+                other => {
+                    // These expect a single contiguous buffer
+                    if first {
+                        data = packets.concat();
+                        first = false;
+                    }
+                    let (d2, q) = self.apply_decodings(data, &[other.clone()])?;
+                    data = d2;
+                    quality += q;
                 }
-                quality += 10;
             }
         }
         if first {
@@ -387,54 +390,52 @@ impl Deframer {
     fn complete_message(&mut self, key: (Option<String>, u32)) {
         let Some(session) = self.sessions.remove(&key) else { return; };
         
-        // Merge headers
         let mut merged = session.headers[0].clone();
         for h in &session.headers[1..] {
             let _ = merged.merge(h);
         }
         merged.strip_chunking();
         
-        let mut data = Vec::new();
-        let ce_list = if let Some(ce) = &merged.content_encoding {
-            ce_to_list(ce)
-        } else {
-            Vec::new()
-        };
-
-        let (pre, _, _) = self.split_encs(&ce_list);
-        let last_split = pre.iter().rposition(|e| CHUNK_RE.is_match(e) || REPEAT_RE.is_match(e) || RQ_RE.is_match(e));
-        
-        let message_level_encs = match last_split {
-            Some(idx) => &pre[..idx + 1],
-            None => &[], // Everything was applied per-PDU in receive_bytes
-        };
-
         let rq_info = get_rq_info(&session.headers);
+        let mut data = Vec::new();
 
         if let Some((rq_len, mtu, _)) = rq_info {
             let packets: Vec<Vec<u8>> = session.chunks.into_values().map(|(p, _)| p).collect();
             if let Ok(decoded) = rq_decode(packets, rq_len, mtu) {
                 data = decoded;
-                // Now apply other message-level decodings EXCEPT 'rq' which we just did
-                let mut filtered_msg_encs = Vec::new();
-                for enc in message_level_encs {
-                    if !RQ_RE.is_match(enc) {
-                        filtered_msg_encs.push(enc.clone());
-                    }
-                }
-                if let Ok((d2, _)) = self.apply_decodings(data, &filtered_msg_encs) {
-                    data = d2;
-                } else { return; }
             } else { return; }
         } else {
-            let mut sorted_keys: Vec<_> = session.chunks.keys().collect();
+            let mut sorted_keys: Vec<_> = session.chunks.keys().cloned().collect();
             sorted_keys.sort();
             for k in sorted_keys {
-                data.extend_from_slice(&session.chunks.get(k).unwrap().0);
+                let (chunk_data, _) = session.chunks.get(&k).unwrap();
+                data.extend_from_slice(chunk_data);
             }
-            if let Ok((d2, _)) = self.apply_decodings(data, message_level_encs) {
-                data = d2;
-            } else { return; }
+        }
+
+        // One level of recursive unpacking if post-boundary FEC returned another PDU
+        if let Ok((h_inner, p_inner)) = unpack(&data) {
+            // It was a nested PDU (likely post-boundary FEC decoded result)
+            merged = h_inner;
+            data = p_inner;
+            // Strip the FEC encoding from the inner header too
+            if let Some(mut el) = merged.content_encoding.take() {
+                el.0.retain(|e| !matches!(e, ContentEncoding::RaptorQ(_, _, _)));
+                if !el.0.is_empty() {
+                    merged.content_encoding = Some(el);
+                }
+            }
+        }
+
+        // Apply remaining decodings (those before the last expansion point)
+        if let Some(ce) = &merged.content_encoding {
+            let list = ce_to_list(ce);
+            let (pre, _, _) = self.split_encs(&list);
+            if let Ok((p2, _)) = self.apply_decodings(data, &pre) {
+                data = p2;
+            } else {
+                return;
+            }
         }
 
         if let Some(size) = merged.file_size {
@@ -442,28 +443,17 @@ impl Deframer {
                 data.truncate(size as usize);
             }
         }
-
-        if let Some(ce) = &mut merged.content_encoding {
-            match ce {
-                ContentEncoding::Multiple(v) => {
-                    v.retain(|e| e != "h" && e != "-1" && !CHUNK_RE.is_match(e) && !REPEAT_RE.is_match(e));
-                    if v.is_empty() { merged.content_encoding = None; }
-                    else if v.len() == 1 { merged.content_encoding = Some(ContentEncoding::Single(v[0].clone())); }
-                }
-                ContentEncoding::Single(s) => {
-                    if s == "h" || s == "-1" || CHUNK_RE.is_match(s) || REPEAT_RE.is_match(s) {
-                        merged.content_encoding = None;
-                    }
-                }
-                ContentEncoding::Integer(i) => {
-                    if *i == -1 { merged.content_encoding = None; }
-                }
-            }
-        }
-
+        
         self.events.push_back(Event::Message(MessageEvent {
-            header: merged,
+            header: merged.clone(),
             payload: data,
         }));
+        // Final cleanup of header encodings for the Message event
+        if let Some(ce) = &mut merged.content_encoding {
+            ce.0.retain(|e| !matches!(e, ContentEncoding::H) && !matches!(e, ContentEncoding::Chunk(_)) && !matches!(e, ContentEncoding::Repeat(_)));
+            if ce.0.is_empty() {
+                merged.content_encoding = None;
+            }
+        }
     }
 }

@@ -140,9 +140,6 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
     if n > 255 || k == 0 || k > n {
         bail!("Invalid RS parameters: n={}, k={}", n, k);
     }
-    if data.len() % n != 0 {
-        bail!("RS data length must be a multiple of n");
-    }
     let ecc_len = n - k;
     let decoder = RSDecoder::new(ecc_len);
     let mut decoded = Vec::with_capacity(data.len() / n * k);
@@ -162,7 +159,7 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
         if block_len <= ecc_len {
             bail!("RS block too short to contain parity");
         }
-        let data_part_len = block_len - ecc_len;
+        let _data_part_len = block_len - ecc_len;
         
         // To decode, we reconstruct the 255-byte codeword.
         // Codeword = [Lib Pad (255-n) zeros] [Internal Pad (n-block_len) zeros] [Received Data] [Received Parity]
@@ -175,15 +172,13 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
             bail!("Internal error: RS codeword length is {}, expected 255", full_codeword.len());
         }
 
-        // Use correct_err_count on the full block.
         match decoder.correct_err_count(&full_codeword, None) {
             Ok((corrected, err_count)) => {
-                // The corrected data is at index (lib_pad + internal_pad) .. (lib_pad + internal_pad + data_part_len)
-                let start = lib_pad + internal_pad;
-                decoded.extend_from_slice(&corrected[start..start + data_part_len]);
+                let dpart = &corrected[255 - block_len..255 - ecc_len];
+                decoded.extend_from_slice(dpart);
                 total_corrected += err_count;
             }
-            Err(_) => bail!("Reed-Solomon decoding failed"),
+            Err(e) => bail!("RS decode failed: {:?}", e),
         }
     }
     Ok((decoded, total_corrected))
