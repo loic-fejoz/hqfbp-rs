@@ -77,3 +77,13 @@ test-tcp-v6: $(OUT_DIR_RS) $(OUT_DIR_PY)
 	sleep 1; \
 	kill $$SLEEP_PID || true
 	$(PYTHON_UV) $(PY_UNPACK) ../hqfbp-rs/$(OUT_DIR_PY) --input ../hqfbp-rs/test_tcp.kiss
+
+broker:
+	ncat -l 8001 --broker
+
+pack-img:
+	cargo run --release --bin pack -- ../hqfbp/img_0.png \
+		--src-callsign F4JXQ \
+		--tcp 127.0.0.1:8001 \
+		--encodings "gzip,h,chunk(223),rs(255,223),repeat(2)" \
+		--ann-encodings "h,crc32,repeat(2)"

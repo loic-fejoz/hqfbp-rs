@@ -1,16 +1,14 @@
 use anyhow::Result;
-use crate::{Header, pack, unpack, ContentEncoding, MediaType};
+use crate::{Header, pack, ContentEncoding, MediaType};
 use crate::codec::*;
 use bytes::Bytes;
 
-// EncValue removed in favor of crate::ContentEncoding
-
 pub struct PDUGenerator {
-    pub src_callsign: Option<String>,
-    pub dst_callsign: Option<String>,
-    pub max_payload_size: Option<usize>,
-    pub encodings: Vec<ContentEncoding>,
-    pub announcement_encoder: Option<Box<PDUGenerator>>,
+    src_callsign: Option<String>,
+    dst_callsign: Option<String>,
+    max_payload_size: Option<usize>,
+    encodings: Vec<ContentEncoding>,
+    announcement_encoder: Option<Box<PDUGenerator>>,
     next_msg_id: u32,
 }
 
@@ -50,13 +48,21 @@ impl PDUGenerator {
         id
     }
 
-    fn apply_encodings(&self, data: &[u8], encodings: &[ContentEncoding]) -> Result<Vec<Bytes>> {
+    fn apply_encodings(&self, data: Bytes, encs: &[ContentEncoding]) -> Result<Vec<Bytes>> {
         let mut current_data = data.to_vec();
-        for enc in encodings {
+        for enc in encs {
             match enc {
-                ContentEncoding::Gzip => current_data = gzip_compress(&current_data)?,
-                ContentEncoding::Brotli => current_data = brotli_compress(&current_data)?,
-                ContentEncoding::Lzma => current_data = lzma_compress(&current_data)?,
+                ContentEncoding::H => {}
+                ContentEncoding::Identity => {}
+                ContentEncoding::Gzip => {
+                    current_data = gzip_compress(&current_data)?;
+                }
+                ContentEncoding::Brotli => {
+                    current_data = brotli_compress(&current_data)?;
+                }
+                ContentEncoding::Lzma => {
+                    current_data = lzma_compress(&current_data)?;
+                }
                 ContentEncoding::Crc16 => {
                     let crc = crc16_ccitt(&current_data);
                     current_data.extend_from_slice(&crc);
@@ -95,26 +101,18 @@ impl PDUGenerator {
         let boundary_idx = encs.iter().position(|e| matches!(e, ContentEncoding::H)).unwrap();
         let pre = &encs[..boundary_idx];
         
-        let mut has_chunk = pre.iter().any(|e| matches!(e, ContentEncoding::Chunk(_)));
+        let has_chunk = pre.iter().any(|e| matches!(e, ContentEncoding::Chunk(_)));
 
         if !has_chunk {
-            for (i, e) in pre.iter().enumerate() {
-                if let ContentEncoding::ReedSolomon(_, k) = e {
-                    encs.insert(i, ContentEncoding::Chunk(*k));
-                    has_chunk = true;
-                    break;
+            if let Some(limit) = self.max_payload_size {
+                let mut new_encs = Vec::new();
+                for (i, e) in encs.iter().enumerate() {
+                    if i == boundary_idx {
+                        new_encs.push(ContentEncoding::Chunk(limit));
+                    }
+                    new_encs.push(e.clone());
                 }
-                if let ContentEncoding::RaptorQ(_, _, _) = e {
-                    has_chunk = true;
-                    break;
-                }
-            }
-        }
-
-        if !has_chunk {
-            if let Some(size) = self.max_payload_size {
-                let current_b_idx = encs.iter().position(|e| matches!(e, ContentEncoding::H)).unwrap();
-                encs.insert(current_b_idx, ContentEncoding::Chunk(size));
+                return new_encs;
             }
         }
 
@@ -141,9 +139,7 @@ impl PDUGenerator {
         };
         header_template.set_media_type(media_type);
 
-        let mut after_boundary = false;
-        for i in 0..full_encs.len() {
-            let enc = &full_encs[i];
+        for enc in &full_encs {
             if matches!(enc, ContentEncoding::H) {
                 let total_chunks = current_chunks.len() as u32;
                 let mut new_chunks = Vec::new();
@@ -175,7 +171,6 @@ impl PDUGenerator {
                     new_chunks.push(pack(&header, chunk_data)?);
                 }
                 current_chunks = new_chunks;
-                after_boundary = true;
             } else if let ContentEncoding::Chunk(size) = enc {
                 let mut next_chunks = Vec::new();
                 for chunk in current_chunks {
@@ -196,29 +191,10 @@ impl PDUGenerator {
                 }
                 current_chunks = next_chunks;
             } else {
-                // Transformation
                 let mut next_chunks = Vec::new();
                 for c in &current_chunks {
-                    let transformed = self.apply_encodings(c, &[enc.clone()])?;
-                    if after_boundary && transformed.len() > 1 {
-                        // Expansion occurred after boundary - must re-wrap
-                        let total_fec_chunks = transformed.len() as u32;
-                        let (h_orig, _) = match unpack(c.clone()) {
-                            Ok(res) => res,
-                            Err(_) => (header_template.clone(), c.clone()),
-                        };
-                        for (idx, fec_chunk) in transformed.into_iter().enumerate() {
-                            let mut h = h_orig.clone();
-                            h.message_id = Some(self.get_next_msg_id());
-                            h.chunk_id = Some(idx as u32);
-                            h.total_chunks = Some(total_fec_chunks);
-                            h.original_message_id = h_orig.original_message_id.or(h_orig.message_id);
-                            h.payload_size = Some(fec_chunk.len() as u64);
-                            next_chunks.push(pack(&h, &fec_chunk)?);
-                        }
-                    } else {
-                        next_chunks.extend(transformed);
-                    }
+                    let transformed = self.apply_encodings(c.clone(), &[enc.clone()])?;
+                    next_chunks.extend(transformed);
                 }
                 current_chunks = next_chunks;
             }
@@ -228,13 +204,20 @@ impl PDUGenerator {
         if let (Some(ann_enc), Some(aid)) = (self.announcement_encoder.as_mut(), ann_msg_id) {
             ann_enc.next_msg_id = aid;
             let mut ann_header = Header {
+                message_id: Some(aid),
+                ..header_template.clone()
+            };
+            ann_header.set_media_type(Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())));
+            
+            let mut announcement_body = Header {
                 message_id: Some(data_orig_id),
+                content_encoding: Some(crate::EncodingList(full_encs.clone())),
                 ..Default::default()
             };
-            ann_header.content_encoding = Some(crate::EncodingList(full_encs.clone()));
+            announcement_body.set_media_type(header_template.media_type());
             
-            let ann_payload = minicbor::to_vec(&ann_header)?;
-            let ann_pdus = ann_enc.generate(&ann_payload, Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())))?;
+            let body_bytes = minicbor::to_vec(&announcement_body).unwrap();
+            let ann_pdus = ann_enc.generate(&body_bytes, Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())))?;
             final_pdus.extend(ann_pdus);
         }
 

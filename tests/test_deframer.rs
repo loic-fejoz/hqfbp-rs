@@ -134,3 +134,171 @@ fn test_deframer_multi_sender() {
         assert_eq!(me.header.src_callsign, Some("S2".to_string()));
     }
 }
+
+#[test]
+fn test_deframer_announcement_and_crc() {
+    let mut deframer = Deframer::new();
+    let mut generator = PDUGenerator::new(
+        Some("F4JXQ-2".to_string()),
+        None,
+        None,
+        Some(vec![hqfbp_rs::ContentEncoding::H, hqfbp_rs::ContentEncoding::Crc32]),
+        Some(vec![hqfbp_rs::ContentEncoding::Identity]),
+        1,
+    );
+    let data = b"Sensitive Data";
+    let pdus = generator.generate(data, None).unwrap();
+    
+    deframer.receive_bytes(&pdus[0]); // Announcement
+    deframer.receive_bytes(&pdus[1]); // Data
+    
+    let mut found = false;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            assert!(me.payload.starts_with(data));
+            found = true;
+        }
+    }
+    assert!(found);
+}
+
+#[test]
+fn test_deframer_compression() {
+    let mut deframer = Deframer::new();
+    let data = b"Compress me please!".repeat(10);
+    let mut generator = PDUGenerator::new(
+        Some("GZIPPER".to_string()),
+        None,
+        None,
+        Some(vec![hqfbp_rs::ContentEncoding::Gzip]),
+        None,
+        1,
+    );
+    let pdus = generator.generate(&data, None).unwrap();
+    for pdu in pdus {
+        deframer.receive_bytes(&pdu);
+    }
+    
+    let mut msg_ev = None;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            msg_ev = Some(me);
+        }
+    }
+    let msg = msg_ev.expect("Message expected");
+    assert_eq!(msg.payload.as_ref(), data);
+}
+
+#[test]
+fn test_deframer_heuristic_gzip_header() {
+    let mut deframer = Deframer::new();
+    let data = b"Heuristic data with gzipped header";
+    let mut generator = PDUGenerator::new(
+        Some("HEURISTIC-1".to_string()),
+        None,
+        None,
+        Some(vec![hqfbp_rs::ContentEncoding::H, hqfbp_rs::ContentEncoding::Gzip]),
+        Some(vec![hqfbp_rs::ContentEncoding::Identity]),
+        1,
+    );
+    let pdus = generator.generate(data, None).unwrap();
+    
+    deframer.receive_bytes(&pdus[0]); // Announcement
+    deframer.receive_bytes(&pdus[1]); // Data (heuristic)
+    
+    let mut found = false;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            assert!(me.payload.starts_with(data));
+            found = true;
+        }
+    }
+    assert!(found);
+}
+
+#[test]
+fn test_deframer_heuristic_multi_encodings() {
+    let mut deframer = Deframer::new();
+    let data = b"Multi-layer heuristic test";
+    let mut generator = PDUGenerator::new(
+        Some("HEURISTIC-2".to_string()),
+        None,
+        None,
+        Some(vec![hqfbp_rs::ContentEncoding::H, hqfbp_rs::ContentEncoding::Gzip, hqfbp_rs::ContentEncoding::Crc32]),
+        Some(vec![hqfbp_rs::ContentEncoding::Identity]),
+        1,
+    );
+    let pdus = generator.generate(data, None).unwrap();
+    
+    deframer.receive_bytes(&pdus[0]);
+    deframer.receive_bytes(&pdus[1]);
+    
+    let mut found = false;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            assert!(me.payload.starts_with(data));
+            found = true;
+        }
+    }
+    assert!(found);
+}
+
+#[test]
+fn test_deframer_multi_sender_interleaved_announcements() {
+    let mut deframer = Deframer::new();
+    
+    // S1: Standard
+    let mut gen1 = PDUGenerator::new(Some("S1".to_string()), None, Some(10), None, None, 1);
+    let data1 = b"S1: Basic data";
+    let pdus1 = gen1.generate(data1, None).unwrap();
+    
+    // S2: Gzip post-boundary
+    let mut gen2 = PDUGenerator::new(
+        Some("S2".to_string()), 
+        None, 
+        Some(10), 
+        Some(vec![hqfbp_rs::ContentEncoding::H, hqfbp_rs::ContentEncoding::Gzip]),
+        Some(vec![hqfbp_rs::ContentEncoding::Identity]),
+        1
+    );
+    let data2 = b"S2: Gzipped header data";
+    let pdus2 = gen2.generate(data2, None).unwrap();
+    
+    // S3: Complex
+    let mut gen3 = PDUGenerator::new(
+        Some("S3".to_string()), 
+        None, 
+        Some(10), 
+        Some(vec![hqfbp_rs::ContentEncoding::H, hqfbp_rs::ContentEncoding::Gzip, hqfbp_rs::ContentEncoding::Crc32]),
+        Some(vec![hqfbp_rs::ContentEncoding::Identity]),
+        1
+    );
+    let data3 = b"S3: Double trouble";
+    let pdus3 = gen3.generate(data3, None).unwrap();
+    
+    let mut all_pdus = Vec::new();
+    let max_len = pdus1.len().max(pdus2.len()).max(pdus3.len());
+    for i in range(0..max_len) {
+        if i < pdus1.len() { all_pdus.push(&pdus1[i]); }
+        if i < pdus2.len() { all_pdus.push(&pdus2[i]); }
+        if i < pdus3.len() { all_pdus.push(&pdus3[i]); }
+    }
+    
+    for pdu in all_pdus {
+        deframer.receive_bytes(pdu);
+    }
+    
+    let mut results = std::collections::HashMap::new();
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            results.insert(me.header.src_callsign.clone().unwrap(), me.payload.clone());
+        }
+    }
+    
+    assert_eq!(results.get("S1").unwrap().as_ref(), data1);
+    assert_eq!(results.get("S2").unwrap().as_ref(), data2);
+    assert_eq!(results.get("S3").unwrap().as_ref(), data3);
+    assert_eq!(results.len(), 3);
+}
+
+fn range(r: std::ops::Range<usize>) -> std::ops::Range<usize> { r }

@@ -15,7 +15,7 @@ echo "Generating random payload..."
 dd if=/dev/urandom of="$INPUT_FILE" bs=1 count="$FILE_SIZE" status=none
 
 echo "---- PHASE 1: Rust Pack -> Noise -> Python Unpack ----"
-cargo run --bin pack -- "$INPUT_FILE" 0.0.0.0 0 \
+cargo run --bin pack -- "$INPUT_FILE" \
     --src-callsign "R-PK-N" \
     --encodings "$ENCODINGS" \
     --ann-encodings "$ANN_ENCODINGS" \
@@ -51,7 +51,7 @@ fi
 echo "---- PHASE 2: Python Pack -> Noise -> Rust Unpack ----"
 cd ../py-hqfbp
 rm -f "../hqfbp-rs/$KISS_FILE"
-uv run python src/hqfbp/pack.py "../hqfbp-rs/$INPUT_FILE" 0.0.0.0 0 \
+uv run python src/hqfbp/pack.py "../hqfbp-rs/$INPUT_FILE" \
     --src-callsign "P-PK-N" \
     --encodings "$ENCODINGS" \
     --announcement-encodings "$ANN_ENCODINGS" \

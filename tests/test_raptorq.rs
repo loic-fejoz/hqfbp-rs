@@ -47,9 +47,9 @@ fn test_rq_with_loss() {
 #[test]
 fn test_generator_deframer_rq_post_boundary() {
     let data = b"End-to-end RaptorQ test data";
-    let rq_len = 160; 
-    let mtu = 32;
-    let repair_count = 2;
+    let rq_len = data.len() + 45; // Must be greater than len(data + CBOR header)
+    let mtu = (rq_len + 60) as u16;
+    let repair_count = 5;
     
     let mut generator = PDUGenerator::new(
         Some("F4JXQ".to_string()),
@@ -62,8 +62,7 @@ fn test_generator_deframer_rq_post_boundary() {
     
     let pdus = generator.generate(data, None).expect("Generate failed");
     
-    assert!(pdus.len() >= 1 + repair_count as usize);
-    
+    assert!(pdus.len() >= 1 + repair_count as usize); // 7 PDUs actually
     let mut deframer = Deframer::new();
     for pdu in pdus {
         deframer.receive_bytes(&pdu);

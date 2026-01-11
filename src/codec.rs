@@ -146,9 +146,6 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
     let mut decoded = Vec::with_capacity(data.len() / n * k);
     let mut total_corrected = 0;
 
-    // We process in blocks. Each block is 'n' bytes, except possibly the last one.
-    // However, in our protocol, normally each packet is a single block or multiple full blocks.
-    // If it's the result of rs_encode on a short data chunk, it will be (data_len + ecc_len) bytes.
     let mut i = 0;
     while i < data.len() {
         let remaining = data.len() - i;
@@ -156,14 +153,10 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
         let chunk = &data[i..i + block_len];
         i += block_len;
 
-        // ecc_len is fixed for a given (n,k) pair.
         if block_len <= ecc_len {
             bail!("RS block too short to contain parity");
         }
-        let _data_part_len = block_len - ecc_len;
         
-        // To decode, we reconstruct the 255-byte codeword.
-        // Codeword = [Lib Pad (255-n) zeros] [Internal Pad (n-block_len) zeros] [Received Data] [Received Parity]
         let lib_pad = 255 - n;
         let internal_pad = n - block_len;
         let mut full_codeword = vec![0u8; lib_pad + internal_pad];
@@ -179,7 +172,9 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
                 decoded.extend_from_slice(dpart);
                 total_corrected += err_count;
             }
-            Err(e) => bail!("RS decode failed: {:?}", e),
+            Err(e) => {
+                bail!("RS decode failed: {:?}", e);
+            }
         }
     }
     Ok((decoded, total_corrected))
@@ -351,4 +346,36 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     }
     
     Ok((res, min_m))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rs_basic() {
+        let n = 255;
+        let k = 223;
+        let mut data = vec![1, 2, 3, 4, 5];
+        data.resize(k, 223);
+        let encoded = rs_encode(&data, n, k).unwrap();
+        assert_eq!(encoded.len(), 255);
+        
+        let (decoded, corrected) = rs_decode(&encoded, n, k).unwrap();
+        assert_eq!(decoded, data);
+        assert_eq!(corrected, 0);
+    }
+
+    #[test]
+    fn test_rs_shortened() {
+        let n = 255;
+        let k = 223;
+        let data = vec![0x42u8; 100];
+        let encoded = rs_encode(&data, n, k).unwrap();
+        assert_eq!(encoded.len(), 132);
+        
+        let (decoded, corrected) = rs_decode(&encoded, n, k).unwrap();
+        assert_eq!(decoded, data);
+        assert_eq!(corrected, 0);
+    }
 }
