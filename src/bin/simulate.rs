@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 use clap::{Parser, ValueEnum};
-use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::ContentEncoding;
 use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::generator::PDUGenerator;
 use rand::{Rng, RngCore};
 
 #[derive(Parser, Debug)]
@@ -11,7 +11,11 @@ struct Args {
     #[arg(long, default_value_t = 0.0, help = "Bit Error Rate")]
     ber: f64,
 
-    #[arg(long, default_value = "h", help = "Content encodings (e.g. gzip,h,crc32)")]
+    #[arg(
+        long,
+        default_value = "h",
+        help = "Content encodings (e.g. gzip,h,crc32)"
+    )]
     encodings: String,
 
     #[arg(long, help = "Announcement encodings")]
@@ -126,29 +130,66 @@ impl SimulationMetrics {
             let diff = original_payload[i] ^ decoded_payload[i];
             self.total_residual_bit_errors += diff.count_ones() as usize;
         }
-        self.total_residual_bit_errors += (original_payload.len() as isize - decoded_payload.len() as isize).unsigned_abs() * 8;
+        self.total_residual_bit_errors +=
+            (original_payload.len() as isize - decoded_payload.len() as isize).unsigned_abs() * 8;
     }
 
     fn report(&self, format: Format) -> String {
-        let efficiency = (self.total_payload_bits as f64 / self.total_bits_sent as f64 * 100.0).clamp(0.0, 100.0);
-        let packet_loss_rate = (self.pdus_lost as f64 / self.total_pdus_sent as f64 * 100.0).clamp(0.0, 100.0);
-        let file_loss_rate = ((self.files_attempted as f64 - self.files_recovered as f64) / self.files_attempted as f64 * 100.0).clamp(0.0, 100.0);
-        let overhead = ((self.header_bits as f64 + self.padding_bits as f64) / self.total_bits_sent as f64 * 100.0).clamp(0.0, 100.0);
-        let fec_recovery = (self.files_recovered as f64 / self.files_attempted as f64 * 100.0).clamp(0.0, 100.0);
+        let efficiency = (self.total_payload_bits as f64 / self.total_bits_sent as f64 * 100.0)
+            .clamp(0.0, 100.0);
+        let packet_loss_rate =
+            (self.pdus_lost as f64 / self.total_pdus_sent as f64 * 100.0).clamp(0.0, 100.0);
+        let file_loss_rate = ((self.files_attempted as f64 - self.files_recovered as f64)
+            / self.files_attempted as f64
+            * 100.0)
+            .clamp(0.0, 100.0);
+        let overhead = ((self.header_bits as f64 + self.padding_bits as f64)
+            / self.total_bits_sent as f64
+            * 100.0)
+            .clamp(0.0, 100.0);
+        let fec_recovery =
+            (self.files_recovered as f64 / self.files_attempted as f64 * 100.0).clamp(0.0, 100.0);
         let rber = self.total_residual_bit_errors as f64 / self.total_bits_evaluated as f64;
         let air_ber = self.total_bit_errors_introduced as f64 / self.total_bits_on_air as f64;
 
         let mut data = std::collections::BTreeMap::new();
-        data.insert("Total Bytes Sent".to_string(), (self.total_bits_sent / 8).to_string());
-        data.insert("Packet Loss Rate (%)".to_string(), format!("{packet_loss_rate:.2}"));
-        data.insert("File Loss Rate (%)".to_string(), format!("{file_loss_rate:.2}"));
-        data.insert("Bit Error Rate (on air)".to_string(), format!("{air_ber:.2e}"));
-        data.insert("Bit Errors Introduced".to_string(), self.total_bit_errors_introduced.to_string());
+        data.insert(
+            "Total Bytes Sent".to_string(),
+            (self.total_bits_sent / 8).to_string(),
+        );
+        data.insert(
+            "Packet Loss Rate (%)".to_string(),
+            format!("{packet_loss_rate:.2}"),
+        );
+        data.insert(
+            "File Loss Rate (%)".to_string(),
+            format!("{file_loss_rate:.2}"),
+        );
+        data.insert(
+            "Bit Error Rate (on air)".to_string(),
+            format!("{air_ber:.2e}"),
+        );
+        data.insert(
+            "Bit Errors Introduced".to_string(),
+            self.total_bit_errors_introduced.to_string(),
+        );
         data.insert("Residual Bit Error Rate".to_string(), format!("{rber:.2e}"));
-        data.insert("FEC Recovery Rate (%)".to_string(), format!("{fec_recovery:.2}"));
-        data.insert("Transmission Efficiency (%)".to_string(), format!("{efficiency:.2}"));
-        data.insert("Max Burst Loss".to_string(), self.max_burst_loss.to_string());
-        data.insert("Protocol Overhead (%)".to_string(), format!("{overhead:.2}"));
+        data.insert(
+            "FEC Recovery Rate (%)".to_string(),
+            format!("{fec_recovery:.2}"),
+        );
+        data.insert(
+            "Transmission Efficiency (%)".to_string(),
+            format!("{efficiency:.2}"),
+        );
+        data.insert(
+            "Max Burst Loss".to_string(),
+            self.max_burst_loss.to_string(),
+        );
+        data.insert(
+            "Protocol Overhead (%)".to_string(),
+            format!("{overhead:.2}"),
+        );
 
         match format {
             Format::Json => serde_json::to_string_pretty(&data).unwrap(),
@@ -161,15 +202,31 @@ impl SimulationMetrics {
             Format::Markdown => {
                 let keys: Vec<_> = data.keys().cloned().collect();
                 let vals: Vec<_> = data.values().cloned().collect();
-                
+
                 let mut k_width = "Metric".len();
                 let mut v_width = "Value".len();
-                for k in &keys { k_width = k_width.max(k.len()); }
-                for v in &vals { v_width = v_width.max(v.len()); }
-                
+                for k in &keys {
+                    k_width = k_width.max(k.len());
+                }
+                for v in &vals {
+                    v_width = v_width.max(v.len());
+                }
+
                 let mut output = String::new();
-                output.push_str(&format!("| {:<k_width$} | {:<v_width$} |\n", "Metric", "Value", k_width=k_width, v_width=v_width));
-                output.push_str(&format!("| {:-<k_width$} | {:-<v_width$} |\n", "", "", k_width=k_width, v_width=v_width));
+                output.push_str(&format!(
+                    "| {:<k_width$} | {:<v_width$} |\n",
+                    "Metric",
+                    "Value",
+                    k_width = k_width,
+                    v_width = v_width
+                ));
+                output.push_str(&format!(
+                    "| {:-<k_width$} | {:-<v_width$} |\n",
+                    "",
+                    "",
+                    k_width = k_width,
+                    v_width = v_width
+                ));
                 for (k, v) in data {
                     output.push_str(&format!("| {k:<k_width$} | {v:<v_width$} |\n"));
                 }
@@ -183,7 +240,7 @@ fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
     let mut results = Vec::new();
     let mut current = String::new();
     let mut depth = 0;
-    
+
     for c in s.chars() {
         if c == ',' && depth == 0 {
             if !current.is_empty() {
@@ -191,8 +248,12 @@ fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
                 current.clear();
             }
         } else {
-            if c == '(' { depth += 1; }
-            if c == ')' { depth -= 1; }
+            if c == '(' {
+                depth += 1;
+            }
+            if c == ')' {
+                depth -= 1;
+            }
             current.push(c);
         }
     }
@@ -208,17 +269,17 @@ fn parse_single_enc(s: &str) -> ContentEncoding {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     let channel = BitErrorChannel::new(args.ber);
     let mut metrics = SimulationMetrics::new();
-    
+
     let mut rng = rand::thread_rng();
     let mut source_data = vec![0u8; args.file_size];
     rng.fill_bytes(&mut source_data);
-    
+
     let encs = parse_encodings(&args.encodings);
     let ann_encs = args.ann_encodings.as_ref().map(|s| parse_encodings(s));
-    
+
     for _ in 0..args.limit {
         metrics.files_attempted += 1;
         let mut generator = PDUGenerator::new(
@@ -229,14 +290,16 @@ fn main() -> Result<()> {
             ann_encs.clone(),
             1,
         );
-        
-        let pdus = generator.generate(&source_data, None).map_err(|e| anyhow!("Generator failed: {e}"))?;
+
+        let pdus = generator
+            .generate(&source_data, None)
+            .map_err(|e| anyhow!("Generator failed: {e}"))?;
         if args.debug {
             eprintln!("Generated {} PDUs for file", pdus.len());
         }
         let mut clean_pdus_info = Vec::new();
         let mut clean_deframer = Deframer::new();
-        
+
         for pdu in &pdus {
             clean_deframer.receive_bytes(pdu);
             while let Some(ev) = clean_deframer.next_event() {
@@ -258,12 +321,12 @@ fn main() -> Result<()> {
 
         let mut noisy_deframer = Deframer::new();
         let mut recovered = false;
-        
+
         for (clean_pdu, expected_payload) in clean_pdus_info.iter() {
             let (noisy_pdu, errors_in_pdu) = channel.process(clean_pdu);
-            
+
             noisy_deframer.receive_bytes(&noisy_pdu);
-            
+
             let mut pdu_accepted = false;
             while let Some(ev) = noisy_deframer.next_event() {
                 match ev {
@@ -278,17 +341,17 @@ fn main() -> Result<()> {
                     }
                 }
             }
-            
+
             metrics.add_pdu(clean_pdu, !pdu_accepted, errors_in_pdu);
         }
-        
+
         if recovered {
             metrics.files_recovered += 1;
             metrics.total_payload_bits += source_data.len() * 8;
         }
     }
-    
+
     println!("{}", metrics.report(args.format));
-    
+
     Ok(())
 }

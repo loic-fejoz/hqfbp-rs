@@ -1,17 +1,10 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use hqfbp_rs::unpack;
-use hqfbp_rs::generator::PDUGenerator;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hqfbp_rs::deframer::Deframer;
+use hqfbp_rs::generator::PDUGenerator;
+use hqfbp_rs::unpack;
 
 fn bench_unpack(c: &mut Criterion) {
-    let mut generator = PDUGenerator::new(
-        Some("BENCH".to_string()),
-        None,
-        None,
-        None,
-        None,
-        1,
-    );
+    let mut generator = PDUGenerator::new(Some("BENCH".to_string()), None, None, None, None, 1);
     let data = vec![0u8; 1024];
     let pdus = generator.generate(&data, None).unwrap();
     let pdu = pdus[0].clone();
@@ -24,14 +17,7 @@ fn bench_unpack(c: &mut Criterion) {
 }
 
 fn bench_deframer_100k(c: &mut Criterion) {
-    let mut generator = PDUGenerator::new(
-        Some("BENCH".to_string()),
-        None,
-        None,
-        None,
-        None,
-        1,
-    );
+    let mut generator = PDUGenerator::new(Some("BENCH".to_string()), None, None, None, None, 1);
     let data = vec![0u8; 100 * 1024]; // 100KB
     let pdus = generator.generate(&data, None).unwrap();
 
@@ -40,7 +26,7 @@ fn bench_deframer_100k(c: &mut Criterion) {
             let mut deframer = Deframer::new();
             for pdu in &pdus {
                 deframer.receive_bytes(black_box(pdu));
-                while let Some(_) = deframer.next_event() {}
+                while deframer.next_event().is_some() {}
             }
         })
     });

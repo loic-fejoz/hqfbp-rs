@@ -1,13 +1,13 @@
-use minicbor::{Encode, Decode, Decoder, Encoder};
 use anyhow::{Result, anyhow, bail};
+use bytes::Bytes;
+use minicbor::{Decode, Decoder, Encode, Encoder};
 use regex::Regex;
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use bytes::Bytes;
 
 pub mod codec;
-pub mod generator;
 pub mod deframer;
+pub mod generator;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaType {
@@ -18,7 +18,10 @@ pub enum MediaType {
 impl MediaType {
     pub fn to_mime(&self) -> String {
         match self {
-            MediaType::Format(id) => rev_coap_content_formats().get(id).map(|s| s.to_string()).unwrap_or_else(|| format!("application/x-coap-{id}")),
+            MediaType::Format(id) => rev_coap_content_formats()
+                .get(id)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("application/x-coap-{id}")),
             MediaType::Type(s) => s.clone(),
         }
     }
@@ -80,7 +83,9 @@ impl<'b, C> Decode<'b, C> for Header {
                     10 => h.original_message_id = Some(d.u32()?),
                     11 => h.total_chunks = Some(d.u32()?),
                     12 => h.payload_size = Some(d.u64()?),
-                    _ => { d.skip()?; }
+                    _ => {
+                        d.skip()?;
+                    }
                 }
             }
         } else {
@@ -100,7 +105,9 @@ impl<'b, C> Decode<'b, C> for Header {
                     10 => h.original_message_id = Some(d.u32()?),
                     11 => h.total_chunks = Some(d.u32()?),
                     12 => h.payload_size = Some(d.u64()?),
-                    _ => { d.skip()?; }
+                    _ => {
+                        d.skip()?;
+                    }
                 }
             }
             d.skip()?;
@@ -110,38 +117,94 @@ impl<'b, C> Decode<'b, C> for Header {
 }
 
 impl<C> Encode<C> for Header {
-    fn encode<W: minicbor::encode::Write>(&self, e: &mut Encoder<W>, _ctx: &mut C) -> Result<(), minicbor::encode::Error<W::Error>> {
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut Encoder<W>,
+        _ctx: &mut C,
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
         let mut fields = Vec::new();
-        if self.message_id.is_some() { fields.push(0); }
-        if self.src_callsign.is_some() { fields.push(1); }
-        if self.dst_callsign.is_some() { fields.push(2); }
-        if self.content_format.is_some() { fields.push(3); }
-        if self.content_type.is_some() { fields.push(4); }
-        if self.content_encoding.is_some() { fields.push(5); }
-        if self.repr_digest.is_some() { fields.push(6); }
-        if self.content_digest.is_some() { fields.push(7); }
-        if self.file_size.is_some() { fields.push(8); }
-        if self.chunk_id.is_some() { fields.push(9); }
-        if self.original_message_id.is_some() { fields.push(10); }
-        if self.total_chunks.is_some() { fields.push(11); }
-        if self.payload_size.is_some() { fields.push(12); }
+        if self.message_id.is_some() {
+            fields.push(0);
+        }
+        if self.src_callsign.is_some() {
+            fields.push(1);
+        }
+        if self.dst_callsign.is_some() {
+            fields.push(2);
+        }
+        if self.content_format.is_some() {
+            fields.push(3);
+        }
+        if self.content_type.is_some() {
+            fields.push(4);
+        }
+        if self.content_encoding.is_some() {
+            fields.push(5);
+        }
+        if self.repr_digest.is_some() {
+            fields.push(6);
+        }
+        if self.content_digest.is_some() {
+            fields.push(7);
+        }
+        if self.file_size.is_some() {
+            fields.push(8);
+        }
+        if self.chunk_id.is_some() {
+            fields.push(9);
+        }
+        if self.original_message_id.is_some() {
+            fields.push(10);
+        }
+        if self.total_chunks.is_some() {
+            fields.push(11);
+        }
+        if self.payload_size.is_some() {
+            fields.push(12);
+        }
 
         e.map(fields.len() as u64)?;
         for key in fields {
             match key {
-                0 => { e.u8(0)?.u32(self.message_id.unwrap())?; }
-                1 => { e.u8(1)?.str(self.src_callsign.as_ref().unwrap())?; }
-                2 => { e.u8(2)?.str(self.dst_callsign.as_ref().unwrap())?; }
-                3 => { e.u8(3)?.u16(self.content_format.unwrap())?; }
-                4 => { e.u8(4)?.str(self.content_type.as_ref().unwrap())?; }
-                5 => { e.u8(5)?.encode(self.content_encoding.as_ref().unwrap())?; }
-                6 => { e.u8(6)?.bytes(self.repr_digest.as_ref().unwrap())?; }
-                7 => { e.u8(7)?.bytes(self.content_digest.as_ref().unwrap())?; }
-                8 => { e.u8(8)?.u64(self.file_size.unwrap())?; }
-                9 => { e.u8(9)?.u32(self.chunk_id.unwrap())?; }
-                10 => { e.u8(10)?.u32(self.original_message_id.unwrap())?; }
-                11 => { e.u8(11)?.u32(self.total_chunks.unwrap())?; }
-                12 => { e.u8(12)?.u64(self.payload_size.unwrap())?; }
+                0 => {
+                    e.u8(0)?.u32(self.message_id.unwrap())?;
+                }
+                1 => {
+                    e.u8(1)?.str(self.src_callsign.as_ref().unwrap())?;
+                }
+                2 => {
+                    e.u8(2)?.str(self.dst_callsign.as_ref().unwrap())?;
+                }
+                3 => {
+                    e.u8(3)?.u16(self.content_format.unwrap())?;
+                }
+                4 => {
+                    e.u8(4)?.str(self.content_type.as_ref().unwrap())?;
+                }
+                5 => {
+                    e.u8(5)?.encode(self.content_encoding.as_ref().unwrap())?;
+                }
+                6 => {
+                    e.u8(6)?.bytes(self.repr_digest.as_ref().unwrap())?;
+                }
+                7 => {
+                    e.u8(7)?.bytes(self.content_digest.as_ref().unwrap())?;
+                }
+                8 => {
+                    e.u8(8)?.u64(self.file_size.unwrap())?;
+                }
+                9 => {
+                    e.u8(9)?.u32(self.chunk_id.unwrap())?;
+                }
+                10 => {
+                    e.u8(10)?.u32(self.original_message_id.unwrap())?;
+                }
+                11 => {
+                    e.u8(11)?.u32(self.total_chunks.unwrap())?;
+                }
+                12 => {
+                    e.u8(12)?.u64(self.payload_size.unwrap())?;
+                }
                 _ => {}
             }
         }
@@ -189,7 +252,9 @@ impl Header {
         if let Some(f) = self.content_format {
             Some(MediaType::Format(f))
         } else {
-            self.content_type.as_ref().map(|s| MediaType::Type(s.clone()))
+            self.content_type
+                .as_ref()
+                .map(|s| MediaType::Type(s.clone()))
         }
     }
 
@@ -213,10 +278,16 @@ impl Header {
 
     pub fn into_human_readable(self) -> HashMap<String, serde_json::Value> {
         let mut m = HashMap::new();
-        if let Some(v) = &self.message_id { m.insert("Message-Id".to_string(), (*v).into()); }
-        if let Some(v) = &self.src_callsign { m.insert("Src-Callsign".to_string(), v.clone().into()); }
-        if let Some(v) = &self.dst_callsign { m.insert("Dst-Callsign".to_string(), v.clone().into()); }
-        
+        if let Some(v) = &self.message_id {
+            m.insert("Message-Id".to_string(), (*v).into());
+        }
+        if let Some(v) = &self.src_callsign {
+            m.insert("Src-Callsign".to_string(), v.clone().into());
+        }
+        if let Some(v) = &self.dst_callsign {
+            m.insert("Dst-Callsign".to_string(), v.clone().into());
+        }
+
         if let Some(mt) = self.media_type() {
             m.insert("Content-Type".to_string(), mt.to_mime().into());
         }
@@ -229,26 +300,69 @@ impl Header {
                 m.insert("Content-Encoding".to_string(), list.into());
             }
         }
-        
-        if let Some(v) = &self.repr_digest { m.insert("Repr-Digest".to_string(), hex::encode(v).into()); }
-        if let Some(v) = &self.content_digest { m.insert("Content-Digest".to_string(), hex::encode(v).into()); }
-        if let Some(v) = &self.file_size { m.insert("File-Size".to_string(), (*v).into()); }
-        if let Some(v) = &self.chunk_id { m.insert("Chunk-Id".to_string(), (*v).into()); }
-        if let Some(v) = &self.original_message_id { m.insert("Original-Message-Id".to_string(), (*v).into()); }
-        if let Some(v) = &self.total_chunks { m.insert("Total-Chunks".to_string(), (*v).into()); }
-        if let Some(v) = &self.payload_size { m.insert("Payload-Size".to_string(), (*v).into()); }
+
+        if let Some(v) = &self.repr_digest {
+            m.insert("Repr-Digest".to_string(), hex::encode(v).into());
+        }
+        if let Some(v) = &self.content_digest {
+            m.insert("Content-Digest".to_string(), hex::encode(v).into());
+        }
+        if let Some(v) = &self.file_size {
+            m.insert("File-Size".to_string(), (*v).into());
+        }
+        if let Some(v) = &self.chunk_id {
+            m.insert("Chunk-Id".to_string(), (*v).into());
+        }
+        if let Some(v) = &self.original_message_id {
+            m.insert("Original-Message-Id".to_string(), (*v).into());
+        }
+        if let Some(v) = &self.total_chunks {
+            m.insert("Total-Chunks".to_string(), (*v).into());
+        }
+        if let Some(v) = &self.payload_size {
+            m.insert("Payload-Size".to_string(), (*v).into());
+        }
 
         m
     }
 }
 
-fn get_rs_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap()) }
-fn get_rq_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap()) }
-fn get_rq_dyn_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rq\(dlen,\s*(\d+),\s*(\d+)\)").unwrap()) }
-fn get_conv_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap()) }
-fn get_scr_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap()) }
-fn get_chunk_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"chunk\((\d+)\)").unwrap()) }
-fn get_repeat_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"repeat\((\d+)\)").unwrap()) }
+fn get_rs_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap())
+}
+fn get_rq_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap())
+}
+fn get_rq_dyn_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"rq\(dlen,\s*(\d+),\s*(\d+)\)").unwrap())
+}
+fn get_lt_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"lt\((\d+),\s*(\d+),\s*(\d+)\)").unwrap())
+}
+fn get_lt_dyn_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"lt\(dlen,\s*(\d+),\s*(\d+)\)").unwrap())
+}
+fn get_conv_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap())
+}
+fn get_scr_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap())
+}
+fn get_chunk_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"chunk\((\d+)\)").unwrap())
+}
+fn get_repeat_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"repeat\((\d+)\)").unwrap())
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentEncoding {
@@ -263,6 +377,8 @@ pub enum ContentEncoding {
     ReedSolomon(usize, usize),
     RaptorQ(usize, u16, u32),
     RaptorQDynamic(u16, u32),
+    LT(usize, u16, u32),
+    LTDynamic(u16, u32),
     Conv(usize, String),
     Scrambler(u64),
     Chunk(usize),
@@ -285,6 +401,8 @@ impl std::fmt::Display for ContentEncoding {
             ContentEncoding::ReedSolomon(n, k) => write!(f, "rs({n},{k})"),
             ContentEncoding::RaptorQ(len, mtu, rep) => write!(f, "rq({len},{mtu},{rep})"),
             ContentEncoding::RaptorQDynamic(mtu, rep) => write!(f, "rq(dlen,{mtu},{rep})"),
+            ContentEncoding::LT(len, mtu, rep) => write!(f, "lt({len},{mtu},{rep})"),
+            ContentEncoding::LTDynamic(mtu, rep) => write!(f, "lt(dlen,{mtu},{rep})"),
             ContentEncoding::Conv(k, r) => write!(f, "conv({k},{r})"),
             ContentEncoding::Scrambler(p) => write!(f, "scr(0x{p:x})"),
             ContentEncoding::Chunk(s) => write!(f, "chunk({s})"),
@@ -298,20 +416,43 @@ impl std::fmt::Display for ContentEncoding {
 impl TryFrom<&str> for ContentEncoding {
     type Error = anyhow::Error;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        if s == "h" || s == "-1" { Ok(ContentEncoding::H) }
-        else if s == "identity" || s == "0" { Ok(ContentEncoding::Identity) }
-        else if s == "gzip" || s == "1" { Ok(ContentEncoding::Gzip) }
-        else if s == "deflate" || s == "2" { Ok(ContentEncoding::Deflate) }
-        else if s == "br" || s == "3" { Ok(ContentEncoding::Brotli) }
-        else if s == "lzma" || s == "4" { Ok(ContentEncoding::Lzma) }
-        else if s == "crc16" || s == "5" { Ok(ContentEncoding::Crc16) }
-        else if s == "crc32" || s == "6" { Ok(ContentEncoding::Crc32) }
-        else if let Some(m) = get_rs_re().captures(s) {
+        if s == "h" || s == "-1" {
+            Ok(ContentEncoding::H)
+        } else if s == "identity" || s == "0" {
+            Ok(ContentEncoding::Identity)
+        } else if s == "gzip" || s == "1" {
+            Ok(ContentEncoding::Gzip)
+        } else if s == "deflate" || s == "2" {
+            Ok(ContentEncoding::Deflate)
+        } else if s == "br" || s == "3" {
+            Ok(ContentEncoding::Brotli)
+        } else if s == "lzma" || s == "4" {
+            Ok(ContentEncoding::Lzma)
+        } else if s == "crc16" || s == "5" {
+            Ok(ContentEncoding::Crc16)
+        } else if s == "crc32" || s == "6" {
+            Ok(ContentEncoding::Crc32)
+        } else if let Some(m) = get_rs_re().captures(s) {
             Ok(ContentEncoding::ReedSolomon(m[1].parse()?, m[2].parse()?))
         } else if let Some(m) = get_rq_re().captures(s) {
-            Ok(ContentEncoding::RaptorQ(m[1].parse()?, m[2].parse()?, m[3].parse()?))
+            Ok(ContentEncoding::RaptorQ(
+                m[1].parse()?,
+                m[2].parse()?,
+                m[3].parse()?,
+            ))
         } else if let Some(m) = get_rq_dyn_re().captures(s) {
-            Ok(ContentEncoding::RaptorQDynamic(m[1].parse()?, m[2].parse()?))
+            Ok(ContentEncoding::RaptorQDynamic(
+                m[1].parse()?,
+                m[2].parse()?,
+            ))
+        } else if let Some(m) = get_lt_re().captures(s) {
+            Ok(ContentEncoding::LT(
+                m[1].parse()?,
+                m[2].parse()?,
+                m[3].parse()?,
+            ))
+        } else if let Some(m) = get_lt_dyn_re().captures(s) {
+            Ok(ContentEncoding::LTDynamic(m[1].parse()?, m[2].parse()?))
         } else if let Some(m) = get_conv_re().captures(s) {
             Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
         } else if let Some(m) = get_scr_re().captures(s) {
@@ -372,46 +513,82 @@ pub struct EncodingList(pub Vec<ContentEncoding>);
 impl<'b, C> Decode<'b, C> for EncodingList {
     fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
         match d.datatype()? {
-            minicbor::data::Type::U8 | minicbor::data::Type::U16 | minicbor::data::Type::U32 | minicbor::data::Type::U64 |
-            minicbor::data::Type::I8 | minicbor::data::Type::I16 | minicbor::data::Type::I32 | minicbor::data::Type::I64 |
-            minicbor::data::Type::Int => {
+            minicbor::data::Type::U8
+            | minicbor::data::Type::U16
+            | minicbor::data::Type::U32
+            | minicbor::data::Type::U64
+            | minicbor::data::Type::I8
+            | minicbor::data::Type::I16
+            | minicbor::data::Type::I32
+            | minicbor::data::Type::I64
+            | minicbor::data::Type::Int => {
                 let i = d.i8()?;
-                Ok(EncodingList(vec![ContentEncoding::try_from(i).map_err(|_| minicbor::decode::Error::message("invalid enum"))?]))
+                Ok(EncodingList(vec![ContentEncoding::try_from(i).map_err(
+                    |_| minicbor::decode::Error::message("invalid enum"),
+                )?]))
             }
             minicbor::data::Type::String => {
                 let s = d.str()?;
-                Ok(EncodingList(vec![ContentEncoding::try_from(s).map_err(|_| minicbor::decode::Error::message("invalid string"))?]))
+                Ok(EncodingList(vec![ContentEncoding::try_from(s).map_err(
+                    |_| minicbor::decode::Error::message("invalid string"),
+                )?]))
             }
             minicbor::data::Type::Array => {
                 let mut v = Vec::new();
                 let len = d.array()?.unwrap_or(0);
                 for _ in 0..len {
                     match d.datatype()? {
-                        minicbor::data::Type::U8 | minicbor::data::Type::U16 | minicbor::data::Type::U32 | minicbor::data::Type::U64 |
-                        minicbor::data::Type::I8 | minicbor::data::Type::I16 | minicbor::data::Type::I32 | minicbor::data::Type::I64 |
-                        minicbor::data::Type::Int => {
+                        minicbor::data::Type::U8
+                        | minicbor::data::Type::U16
+                        | minicbor::data::Type::U32
+                        | minicbor::data::Type::U64
+                        | minicbor::data::Type::I8
+                        | minicbor::data::Type::I16
+                        | minicbor::data::Type::I32
+                        | minicbor::data::Type::I64
+                        | minicbor::data::Type::Int => {
                             let i = d.i8()?;
-                            v.push(ContentEncoding::try_from(i).map_err(|_| minicbor::decode::Error::message("invalid enum"))?);
+                            v.push(
+                                ContentEncoding::try_from(i).map_err(|_| {
+                                    minicbor::decode::Error::message("invalid enum")
+                                })?,
+                            );
                         }
                         _ => {
                             let s = d.str()?;
-                            v.push(ContentEncoding::try_from(s).map_err(|_| minicbor::decode::Error::message("invalid string"))?);
+                            v.push(
+                                ContentEncoding::try_from(s).map_err(|_| {
+                                    minicbor::decode::Error::message("invalid string")
+                                })?,
+                            );
                         }
                     }
                 }
                 Ok(EncodingList(v))
             }
-            _ => Err(minicbor::decode::Error::type_mismatch(minicbor::data::Type::String)),
+            _ => Err(minicbor::decode::Error::type_mismatch(
+                minicbor::data::Type::String,
+            )),
         }
     }
 }
 
 impl<C> Encode<C> for EncodingList {
-    fn encode<W: minicbor::encode::Write>(&self, e: &mut Encoder<W>, _ctx: &mut C) -> Result<(), minicbor::encode::Error<W::Error>> {
-        let filtered: Vec<_> = self.0.iter().filter(|e| !matches!(e, ContentEncoding::Chunk(_))).collect();
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut Encoder<W>,
+        _ctx: &mut C,
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
+        let filtered: Vec<_> = self
+            .0
+            .iter()
+            .filter(|e| !matches!(e, ContentEncoding::Chunk(_)))
+            .collect();
         if filtered.len() == 1 {
             match filtered[0] {
-                ContentEncoding::OtherString(s) => { e.str(s)?; }
+                ContentEncoding::OtherString(s) => {
+                    e.str(s)?;
+                }
                 other => {
                     let i: i8 = other.clone().into();
                     if i != 127 {
@@ -422,9 +599,9 @@ impl<C> Encode<C> for EncodingList {
                 }
             }
         } else if filtered.is_empty() {
-             // If all were chunks, it becomes identity? Or just omit.
-             // Usually there's at least 'h'.
-             e.i8(0)?; // identity
+            // If all were chunks, it becomes identity? Or just omit.
+            // Usually there's at least 'h'.
+            e.i8(0)?; // identity
         } else {
             e.array(filtered.len() as u64)?;
             for item in filtered {
@@ -446,29 +623,36 @@ pub fn get_coap_id(mimetype: &str) -> Option<u16> {
 
 pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
     let mut h = header.clone();
-    
+
     // 1. Optimize Content-Type to Content-Format
     h.set_media_type(h.media_type());
-    
+
     // 2. Omit default Content-Format 0
     if h.content_format == Some(0) {
         h.content_format = None;
     }
-    
+
     // 3. Ensure Message-Id is present
     if h.message_id.is_none() {
         bail!("Message-Id is mandatory in HQFBP header");
     }
-    
+
     // 4. Update Payload-Size
     h.payload_size = Some(payload.len() as u64);
 
     let mut buf = Vec::new();
     let mut encoder = Encoder::new(&mut buf);
-    encoder.encode(&h).map_err(|e| anyhow!("Header encode failed: {e}"))?;
+    encoder
+        .encode(&h)
+        .map_err(|e| anyhow!("Header encode failed: {e}"))?;
     let header_len = buf.len();
     buf.extend_from_slice(payload);
-    eprintln!("DEBUG: pack h_len={}, p_len={}, total={}", header_len, payload.len(), buf.len());
+    eprintln!(
+        "DEBUG: pack h_len={}, p_len={}, total={}",
+        header_len,
+        payload.len(),
+        buf.len()
+    );
     Ok(Bytes::from(buf))
 }
 
@@ -480,12 +664,14 @@ pub fn unpack(data: Bytes) -> Result<(Header, Bytes)> {
             bail!("Header decode failed: {e}");
         }
     };
-    if header.message_id.is_none() && header.content_type.as_deref() != Some("application/vnd.hqfbp+cbor") {
+    if header.message_id.is_none()
+        && header.content_type.as_deref() != Some("application/vnd.hqfbp+cbor")
+    {
         bail!("Decoded header is missing identifying fields (message_id or content_type)");
     }
     let pos = decoder.position();
     let payload = data.slice(pos..);
-    
+
     Ok((header, payload))
 }
 

@@ -1,6 +1,6 @@
-use anyhow::Result;
-use crate::{Header, pack, ContentEncoding, MediaType};
 use crate::codec::*;
+use crate::{ContentEncoding, Header, MediaType, pack};
+use anyhow::Result;
 use bytes::Bytes;
 
 pub struct PDUGenerator {
@@ -83,6 +83,15 @@ impl PDUGenerator {
                     let res = rq_encode(&current_data, rq_len, *mtu, *repairs)?;
                     return Ok(res.into_iter().collect());
                 }
+                ContentEncoding::LT(len, mtu, repairs) => {
+                    let res = lt_encode(&current_data, *len, *mtu, *repairs)?;
+                    return Ok(res.into_iter().collect());
+                }
+                ContentEncoding::LTDynamic(mtu, repairs) => {
+                    let len = current_data.len();
+                    let res = lt_encode(&current_data, len, *mtu, *repairs)?;
+                    return Ok(res.into_iter().collect());
+                }
                 ContentEncoding::Conv(k, rate) => {
                     current_data = conv_encode(&current_data, *k, rate)?;
                 }
@@ -97,27 +106,29 @@ impl PDUGenerator {
 
     pub fn resolve_encodings(&self) -> Vec<ContentEncoding> {
         let mut encs = self.encodings.clone();
-        
+
         let has_boundary = encs.iter().any(|e| matches!(e, ContentEncoding::H));
         if !has_boundary {
             encs.push(ContentEncoding::H);
         }
 
-        let boundary_idx = encs.iter().position(|e| matches!(e, ContentEncoding::H)).unwrap();
+        let boundary_idx = encs
+            .iter()
+            .position(|e| matches!(e, ContentEncoding::H))
+            .unwrap();
         let pre = &encs[..boundary_idx];
-        
+
         let has_chunk = pre.iter().any(|e| matches!(e, ContentEncoding::Chunk(_)));
 
-        if !has_chunk 
-            && let Some(limit) = self.max_payload_size {
-                let mut new_encs = Vec::new();
-                for (i, e) in encs.iter().enumerate() {
-                    if i == boundary_idx {
-                        new_encs.push(ContentEncoding::Chunk(limit));
-                    }
-                    new_encs.push(e.clone());
+        if !has_chunk && let Some(limit) = self.max_payload_size {
+            let mut new_encs = Vec::new();
+            for (i, e) in encs.iter().enumerate() {
+                if i == boundary_idx {
+                    new_encs.push(ContentEncoding::Chunk(limit));
                 }
-                return new_encs;
+                new_encs.push(e.clone());
+            }
+            return new_encs;
         }
 
         encs
@@ -127,7 +138,7 @@ impl PDUGenerator {
         let file_size = data.len() as u64;
         let mut full_encs = self.resolve_encodings();
         let mut current_chunks = vec![Bytes::copy_from_slice(data)];
-        
+
         let ann_msg_id = if self.announcement_encoder.is_some() {
             Some(self.get_next_msg_id())
         } else {
@@ -150,10 +161,12 @@ impl PDUGenerator {
                 let mut new_chunks = Vec::new();
                 for (idx, chunk_data) in current_chunks.iter().enumerate() {
                     let mut header = header_template.clone();
-                    
+
                     let msg_id = if idx == 0 {
                         let id = data_orig_id;
-                        if self.next_msg_id == id { self.next_msg_id += 1; }
+                        if self.next_msg_id == id {
+                            self.next_msg_id += 1;
+                        }
                         id
                     } else {
                         self.get_next_msg_id()
@@ -165,7 +178,7 @@ impl PDUGenerator {
                         header.original_message_id = Some(data_orig_id);
                     }
                     header.message_id = Some(msg_id);
-                    
+
                     if idx > 0 {
                         header.set_media_type(None);
                     }
@@ -203,6 +216,9 @@ impl PDUGenerator {
                         actual_enc = ContentEncoding::RaptorQ(c.len(), mtu, repairs);
                         // Update full_encs for the header
                         full_encs[i] = actual_enc.clone();
+                    } else if let ContentEncoding::LTDynamic(mtu, repairs) = actual_enc {
+                        actual_enc = ContentEncoding::LT(c.len(), mtu, repairs);
+                        full_encs[i] = actual_enc.clone();
                     }
                     let transformed = self.apply_encodings(c.clone(), &[actual_enc])?;
                     next_chunks.extend(transformed);
@@ -218,17 +234,22 @@ impl PDUGenerator {
                 message_id: Some(aid),
                 ..header_template.clone()
             };
-            ann_header.set_media_type(Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())));
-            
+            ann_header.set_media_type(Some(MediaType::Type(
+                "application/vnd.hqfbp+cbor".to_string(),
+            )));
+
             let mut announcement_body = Header {
                 message_id: Some(data_orig_id),
                 content_encoding: Some(crate::EncodingList(full_encs.clone())),
                 ..Default::default()
             };
             announcement_body.set_media_type(header_template.media_type());
-            
+
             let body_bytes = minicbor::to_vec(&announcement_body).unwrap();
-            let ann_pdus = ann_enc.generate(&body_bytes, Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())))?;
+            let ann_pdus = ann_enc.generate(
+                &body_bytes,
+                Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())),
+            )?;
             final_pdus.extend(ann_pdus);
         }
 

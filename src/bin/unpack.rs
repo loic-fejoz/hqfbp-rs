@@ -1,11 +1,11 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use chrono::Utc;
 use clap::Parser;
 use hqfbp_rs::deframer::{Deframer, Event};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use chrono::Utc;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Unpack KISS frames containing HQFBP PDUs.")]
@@ -53,17 +53,17 @@ impl KISSDeFramer {
             } else if byte == FESC {
                 self.escaped = true;
             } else if self.escaped {
-                    if byte == TFEND {
-                        self.buffer.push(FEND);
-                    } else if byte == TFESC {
-                        self.buffer.push(FESC);
-                    } else {
-                        self.buffer.push(byte);
-                    }
-                    self.escaped = false;
+                if byte == TFEND {
+                    self.buffer.push(FEND);
+                } else if byte == TFESC {
+                    self.buffer.push(FESC);
                 } else {
                     self.buffer.push(byte);
                 }
+                self.escaped = false;
+            } else {
+                self.buffer.push(byte);
+            }
         } else if byte == FEND {
             self.in_frame = true;
             self.buffer.clear();
@@ -75,10 +75,13 @@ impl KISSDeFramer {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     fs::create_dir_all(&args.output).context("Failed to create output directory")?;
 
-    println!("Saving files to: {}", fs::canonicalize(&args.output)?.display());
+    println!(
+        "Saving files to: {}",
+        fs::canonicalize(&args.output)?.display()
+    );
 
     let mut input: Box<dyn Read> = if let Some(addr) = args.tcp {
         println!("Connecting to KISS-over-TCP server at {addr}...");
@@ -97,34 +100,44 @@ fn main() -> Result<()> {
 
     loop {
         let n = input.read(&mut buffer)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
 
         for &byte in &buffer[..n] {
-            if let Some(frame) = kiss_decoder.process_byte(byte) 
-                && frame.len() > 1 && frame[0] == 0x00 {
-                    let pdu = &frame[1..];
-                    deframer.receive_bytes(pdu);
-                    print!(".");
-                    io::stdout().flush()?;
-                    
-                    while let Some(ev) = deframer.next_event() {
-                        if let Event::Message(me) = ev {
-                            println!();
-                            
-                            let callsign = me.header.src_callsign.as_deref().unwrap_or("UNKNOWN");
-                            let ext = me.header.content_type.as_deref()
-                                .and_then(|ct| mime_guess::get_mime_extensions_str(ct).and_then(|exts| exts.first()))
-                                .map(|e| format!(".{e}"))
-                                .unwrap_or_else(|| ".bin".to_string());
+            if let Some(frame) = kiss_decoder.process_byte(byte)
+                && frame.len() > 1
+                && frame[0] == 0x00
+            {
+                let pdu = &frame[1..];
+                deframer.receive_bytes(pdu);
+                print!(".");
+                io::stdout().flush()?;
 
-                            let timestamp = Utc::now().format("%Y-%m-%d-%H%M%S-UTC");
-                            let filename = format!("{timestamp}-{callsign}{ext}");
-                            let filepath = Path::new(&args.output).join(&filename);
+                while let Some(ev) = deframer.next_event() {
+                    if let Event::Message(me) = ev {
+                        println!();
 
-                            let mut file = File::create(&filepath)?;
-                            file.write_all(&me.payload)?;
-                            println!("✅ Received {} ({} bytes)", filename, me.payload.len());
-                        }
+                        let callsign = me.header.src_callsign.as_deref().unwrap_or("UNKNOWN");
+                        let ext = me
+                            .header
+                            .content_type
+                            .as_deref()
+                            .and_then(|ct| {
+                                mime_guess::get_mime_extensions_str(ct)
+                                    .and_then(|exts| exts.first())
+                            })
+                            .map(|e| format!(".{e}"))
+                            .unwrap_or_else(|| ".bin".to_string());
+
+                        let timestamp = Utc::now().format("%Y-%m-%d-%H%M%S-UTC");
+                        let filename = format!("{timestamp}-{callsign}{ext}");
+                        let filepath = Path::new(&args.output).join(&filename);
+
+                        let mut file = File::create(&filepath)?;
+                        file.write_all(&me.payload)?;
+                        println!("✅ Received {} ({} bytes)", filename, me.payload.len());
+                    }
                 }
             }
         }

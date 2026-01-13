@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use hqfbp_rs::generator::PDUGenerator;
-    use hqfbp_rs::deframer::{Deframer, Event};
     use hqfbp_rs::ContentEncoding;
+    use hqfbp_rs::deframer::{Deframer, Event};
+    use hqfbp_rs::generator::PDUGenerator;
 
     #[test]
     fn test_crc_repro() {
@@ -12,7 +12,7 @@ mod tests {
             ContentEncoding::H,
             ContentEncoding::ReedSolomon(255, 223),
         ];
-        
+
         // Generator
         let mut generator = PDUGenerator::new(
             Some("SRC".to_string()),
@@ -30,7 +30,7 @@ mod tests {
         // Deframer
         let mut deframer = Deframer::new();
         deframer.receive_bytes(pdu);
-        
+
         let mut recovered = false;
         while let Some(ev) = deframer.next_event() {
             if let Event::Message(me) = ev {

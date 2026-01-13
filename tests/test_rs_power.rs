@@ -1,4 +1,4 @@
-use hqfbp_rs::codec::{rs_encode, rs_decode};
+use hqfbp_rs::codec::{rs_decode, rs_encode};
 use rand::{Rng, thread_rng};
 
 fn test_rs_power(n: usize, k: usize, ber: f64, iterations: usize) {
@@ -9,9 +9,9 @@ fn test_rs_power(n: usize, k: usize, ber: f64, iterations: usize) {
     for _ in 0..iterations {
         let mut data = vec![0u8; k];
         rng.fill(&mut data[..]);
-        
+
         let encoded = rs_encode(&data, n, k).unwrap();
-        
+
         // Inject noise
         let mut noisy = encoded.clone();
         for byte in noisy.iter_mut() {
@@ -21,19 +21,25 @@ fn test_rs_power(n: usize, k: usize, ber: f64, iterations: usize) {
                 }
             }
         }
-        
-        if let Ok((decoded, corrected)) = rs_decode(&noisy, n, k) {
-            if decoded == data {
-                successes += 1;
-                total_corrected += corrected;
-            }
+
+        if let Ok((decoded, corrected)) = rs_decode(&noisy, n, k)
+            && decoded == data
+        {
+            successes += 1;
+            total_corrected += corrected;
         }
     }
 
-    println!("Rust RS({},{}) at BER {}:", n, k, ber);
-    println!("  Success Rate: {:.2}%", (successes as f64 / iterations as f64) * 100.0);
+    println!("Rust RS({n},{k}) at BER {ber}:");
+    println!(
+        "  Success Rate: {:.2}%",
+        (successes as f64 / iterations as f64) * 100.0
+    );
     if successes > 0 {
-        println!("  Avg Corrected: {:.2}", total_corrected as f64 / successes as f64);
+        println!(
+            "  Avg Corrected: {:.2}",
+            total_corrected as f64 / successes as f64
+        );
     }
 }
 

@@ -1,6 +1,6 @@
-use hqfbp_rs::generator::PDUGenerator;
-use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::ContentEncoding;
+use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::generator::PDUGenerator;
 
 #[test]
 fn test_chunk_rs_after_h() {

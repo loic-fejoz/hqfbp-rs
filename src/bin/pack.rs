@@ -1,5 +1,5 @@
-use anyhow::{Result, Context};
-use clap::{Parser};
+use anyhow::{Context, Result};
+use clap::Parser;
 use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::{ContentEncoding, MediaType};
 use std::fs::File;
@@ -7,7 +7,11 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Pack a file into KISS frames using the HQFBP protocol.")]
+#[command(
+    author,
+    version,
+    about = "Pack a file into KISS frames using the HQFBP protocol."
+)]
 struct Args {
     #[arg(help = "Path to the file to send")]
     filepath: String,
@@ -67,7 +71,7 @@ fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
     let mut results = Vec::new();
     let mut current = String::new();
     let mut depth = 0;
-    
+
     for c in s.chars() {
         if c == ',' && depth == 0 {
             if !current.is_empty() {
@@ -75,8 +79,12 @@ fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
                 current.clear();
             }
         } else {
-            if c == '(' { depth += 1; }
-            if c == ')' { depth -= 1; }
+            if c == '(' {
+                depth += 1;
+            }
+            if c == ')' {
+                depth -= 1;
+            }
             current.push(c);
         }
     }
@@ -92,16 +100,18 @@ fn parse_single_enc(s: &str) -> ContentEncoding {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    
+
     let encodings = args.encodings.as_ref().map(|s| parse_encodings(s));
     let ann_encodings = args.ann_encodings.as_ref().map(|s| parse_encodings(s));
-    
+
     let mut f = File::open(&args.filepath).context("Failed to open input file")?;
     let mut data = Vec::new();
     f.read_to_end(&mut data)?;
 
     // Guess content type (mimic standard fallback)
-    let content_type = mime_guess::from_path(&args.filepath).first_or_octet_stream().to_string();
+    let content_type = mime_guess::from_path(&args.filepath)
+        .first_or_octet_stream()
+        .to_string();
 
     let mut generator = PDUGenerator::new(
         Some(args.src_callsign),
@@ -118,7 +128,9 @@ fn main() -> Result<()> {
         println!("Connecting to KISS-over-TCP server at {addr}...");
         Box::new(TcpStream::connect(addr).context("Failed to connect to TCP server")?)
     } else {
-        let output_path = args.output.unwrap_or_else(|| format!("{}.kiss", args.filepath));
+        let output_path = args
+            .output
+            .unwrap_or_else(|| format!("{}.kiss", args.filepath));
         println!("Writing to KISS file {output_path}...");
         Box::new(File::create(&output_path).context("Failed to create output file")?)
     };

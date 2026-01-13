@@ -91,3 +91,10 @@ pack-img:
 test-py-bench:
 	@echo "Running cross-implementation benchmark against Python samples"
 	python3 scripts/test_against_py_samples.py ../py-hqfbp/samples
+
+simulate-lt:
+	cargo run --release --bin simulate -- --file-size 2048 \
+		--limit 1000 \
+	    --ber 0.0001 \
+	    --encodings "lt(dlen,512,10),crc32,h" \
+	    --ann-encodings "h,crc32,repeat(3)"
