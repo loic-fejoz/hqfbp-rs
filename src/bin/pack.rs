@@ -37,6 +37,9 @@ struct Args {
     #[arg(long, help = "Output KISS file path")]
     output: Option<String>,
 
+    #[arg(long, short, help = "Enable verbose logging (DEBUG level)")]
+    verbose: bool,
+
     #[arg(long, help = "KISS-over-TCP server address (e.g., localhost:8001)")]
     tcp: Option<String>,
 }
@@ -100,6 +103,17 @@ fn parse_single_enc(s: &str) -> ContentEncoding {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Initialize logger
+    let level = if args.verbose {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+    env_logger::Builder::new()
+        .filter(None, level)
+        .format_timestamp(None)
+        .init();
 
     let encodings = args.encodings.as_ref().map(|s| parse_encodings(s));
     let ann_encodings = args.ann_encodings.as_ref().map(|s| parse_encodings(s));

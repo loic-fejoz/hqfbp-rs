@@ -18,6 +18,9 @@ struct Args {
 
     #[arg(long, help = "KISS-over-TCP server address (e.g., localhost:8001)")]
     tcp: Option<String>,
+
+    #[arg(long, short, help = "Enable verbose logging (DEBUG level)")]
+    verbose: bool,
 }
 
 const FEND: u8 = 0xC0;
@@ -75,6 +78,17 @@ impl KISSDeFramer {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Initialize logger
+    let level = if args.verbose {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+    env_logger::Builder::new()
+        .filter(None, level)
+        .format_timestamp(None)
+        .init();
 
     fs::create_dir_all(&args.output).context("Failed to create output directory")?;
 

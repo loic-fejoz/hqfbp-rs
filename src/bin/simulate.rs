@@ -30,8 +30,8 @@ struct Args {
     #[arg(long, value_enum, default_value_t = Format::Markdown, help = "Output format")]
     format: Format,
 
-    #[arg(long, help = "Enable debug prints")]
-    debug: bool,
+    #[arg(long, short, help = "Enable verbose logging (DEBUG level)")]
+    verbose: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
@@ -270,6 +270,17 @@ fn parse_single_enc(s: &str) -> ContentEncoding {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Initialize logger
+    let level = if args.verbose {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+    env_logger::Builder::new()
+        .filter(None, level)
+        .format_timestamp(None)
+        .init();
+
     let channel = BitErrorChannel::new(args.ber);
     let mut metrics = SimulationMetrics::new();
 
@@ -294,9 +305,7 @@ fn main() -> Result<()> {
         let pdus = generator
             .generate(&source_data, None)
             .map_err(|e| anyhow!("Generator failed: {e}"))?;
-        if args.debug {
-            eprintln!("Generated {} PDUs for file", pdus.len());
-        }
+        log::debug!("Generated {} PDUs for file", pdus.len());
         let mut clean_pdus_info = Vec::new();
         let mut clean_deframer = Deframer::new();
 

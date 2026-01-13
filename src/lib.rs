@@ -647,8 +647,8 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
         .map_err(|e| anyhow!("Header encode failed: {e}"))?;
     let header_len = buf.len();
     buf.extend_from_slice(payload);
-    eprintln!(
-        "DEBUG: pack h_len={}, p_len={}, total={}",
+    log::debug!(
+        "pack h_len={}, p_len={}, total={}",
         header_len,
         payload.len(),
         buf.len()
