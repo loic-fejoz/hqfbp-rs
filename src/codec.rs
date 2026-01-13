@@ -198,7 +198,7 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
         }
 
         match decoder.correct_err_count(&full_codeword, None) {
-            Ok((corrected, err_count)) => {
+             Ok((corrected, err_count)) => {
                 // Decoded data is from lib_pad to lib_pad + k
                 let dpart = &corrected[lib_pad..lib_pad + k];
                 decoded.extend_from_slice(dpart);

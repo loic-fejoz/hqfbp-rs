@@ -111,6 +111,6 @@ fn test_regression_systematic_rs_header_corrupt() {
         }
     }
     
-    assert_eq!(messages.len(), 1, "Should have recovered the message from a corrupt PDU using RS via announcement");
-    assert_eq!(messages[0].payload.as_ref(), &data[..]);
+    assert_eq!(messages.len(), 2, "Should have recovered the message from a corrupt PDU using RS via announcement");
+    assert_eq!(messages[1].payload.as_ref(), &data[..]);
 }

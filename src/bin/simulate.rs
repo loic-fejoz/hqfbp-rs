@@ -231,6 +231,9 @@ fn main() -> Result<()> {
         );
         
         let pdus = generator.generate(&source_data, None).map_err(|e| anyhow!("Generator failed: {}", e))?;
+        if args.debug {
+            eprintln!("Generated {} PDUs for file", pdus.len());
+        }
         let mut clean_pdus_info = Vec::new();
         let mut clean_deframer = Deframer::new();
         

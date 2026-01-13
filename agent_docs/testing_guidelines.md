@@ -19,13 +19,15 @@ cargo run --bin simulate -- --ber 1e-3 --limit 100 --encodings gzip,h,rs(120,100
 ```
 Refer to [tests/test_rs_power.rs](file:///home/loic/projets/hqfbp-rs/tests/test_rs_power.rs) for an example of automated power-testing.
 
-## 4. Cross-Platform Compatibility
-Scripts: `test_cross_compat_*.sh`.
-Validates bit-accuracy between the Rust and Python implementations. 
-- **`test_cross_compat_py_rs.sh`**: Packs with Python, injects noise (optionally), and unpacks with Rust.
-- **`test_cross_compat_rs_py.sh`**: Packs with Rust, injects noise (optionally), and unpacks with Python.
+## 4. Cross-Implementation & Interoperability
+This is the most critical verification layer for ensuring bit-accuracy with the Python reference implementation.
 
-Requires the Python reference implementation (`https://github.com/loic-fejoz/py-hqfbp/`) to be available in the adjacent directory. These tests are essential for ensuring that any logic changes in Rust remain compatible with the protocol's master reference.
+- **Automated Benchmarking:** `make test-py-bench` runs a comprehensive suite against Python-generated samples. See [Cross-Implementation Testing](file:///home/loic/projets/hqfbp-rs/agent_docs/cross_implementation_testing.md) for details.
+- **Round-Trip Shell Scripts:**
+    - **`test_cross_compat_py_rs.sh`**: Python Pack -> Rust Unpack.
+    - **`test_cross_compat_rs_py.sh`**: Rust Pack -> Python Unpack.
+
+Requires the Python reference implementation to be available in the adjacent directory (`../py-hqfbp`).
 
 ## Best Practices
 - **Mocking Noise:** Use the `BitErrorChannel` in simulation contexts rather than manually flipping bits in unit tests.

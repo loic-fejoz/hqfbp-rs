@@ -134,20 +134,30 @@ impl Deframer {
                 // Apply PDU-level decodings to the WHOLE PDU
                 match self.apply_decodings(b_data.clone(), &post, Some(&h_peek), false) {
                     Ok((clean_pdu, q)) => {
-                        match unpack(clean_pdu.clone()) {
-                            Ok((mut h2, p2)) => {
-                                self.strip_post_h_encodings(&mut h2);
-                                if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2.clone()) {
-                                    header = Some(h2);
-                                    payload = Some(p3);
-                                    pdu_quality = q + q_gain;
-                                    _decoded_pdu_level = true;
-                                }
+                        if let Ok((mut h2, p2)) = unpack(clean_pdu.clone()) {
+                            self.strip_post_h_encodings(&mut h2);
+                             // Check for announcement
+                            let is_ann = h2.media_type() == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())) || 
+                                         h2.media_type() == Some(MediaType::Format(60));
+                            if is_ann {
+                                // eprintln!("DEBUG: Phase 1 decoded Announcement!");
                             }
-                            Err(_) => {}
+
+                            if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2.clone()) {
+                                header = Some(h2);
+                                payload = Some(p3);
+                                pdu_quality = q + q_gain;
+                                _decoded_pdu_level = true;
+                            }
                         }
                     }
-                    Err(_e) => {}
+                    Err(e) => {
+                        let is_ann = h_peek.media_type() == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())) || 
+                                     h_peek.media_type() == Some(MediaType::Format(60));
+                        if is_ann {
+                             eprintln!("DEBUG: Phase 1 Announcement failed: {}", e);
+                        }
+                    }
                 }
             } else {
                 // No encodings known, use the peeked result as-is
@@ -202,8 +212,53 @@ impl Deframer {
                     }
                 }
                 
+                // 2a. Try decoding JUST the current packet (Per-PDU FEC)
+                let mut single_success = false;
+                match self.apply_decodings_multi(vec![b_data.clone()], &post, None, false) {
+                    Ok((clean_pdu, q)) => {
+                         if let Ok((mut h2, p2)) = unpack(clean_pdu) {
+                            self.strip_post_h_encodings(&mut h2);
+                            if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
+                                let src_c = h2.src_callsign.clone();
+                                let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
+                                let session_key = (src_c, orig_id);
+                                let chunk_id = h2.chunk_id.unwrap_or(0);
+                                let new_quality = q + q_gain;
+                                 
+                                let already_had_better = if let Some(s) = self.sessions.get(&session_key) {
+                                    if let Some(existing) = s.chunks.get(&chunk_id) {
+                                        existing.1 >= new_quality
+                                    } else { false }
+                                } else { false };
+
+                                self.process_pdu(h2, p3, new_quality);
+                                reclaimed_any = true;
+                                single_success = true;
+                            }
+                        }
+                    }
+                    Err(_e) => {
+                         // eprintln!("DEBUG: Phase 2 single attempt failed: {}", e);
+                    }
+                }
+                
                 if single_success {
                     continue; 
+                }
+
+                // If post contains ONLY packet-local encodings (RS, CRC, Scrambler), 
+                // group decoding is useless because they would have passed Phase 1 if valid.
+                // We only need to retry group decoding if there are "Combiners" (RQ, Chunk, Repeat).
+                let has_combiner = post.iter().any(|e| matches!(e, 
+                    ContentEncoding::RaptorQ(_,_,_) | 
+                    ContentEncoding::RaptorQDynamic(_,_) | 
+                    ContentEncoding::Chunk(_) | 
+                    ContentEncoding::Repeat(_) |
+                    ContentEncoding::H
+                ));
+
+                if !has_combiner {
+                    continue;
                 }
 
                 let mut try_list = self.not_yet_decoded.clone();
@@ -514,6 +569,16 @@ impl Deframer {
         let (pre, _post, _has_h) = split_encs(&ce_list);
         
         let mut pre_fixed = pre.clone();
+
+        // Calculate Last Splitting Index (lsi) to identify which encodings were PDU-level
+        // and thus already handled in Phase 1 (apply_pdu_level_decodings).
+        // We must NOT re-apply these.
+        let mut lsi = -1;
+        for (i, e) in pre.iter().enumerate() {
+            if matches!(e, ContentEncoding::Chunk(_) | ContentEncoding::Repeat(_) | ContentEncoding::RaptorQ(_, _, _) | ContentEncoding::ReedSolomon(_, _)) {
+                lsi = i as i32;
+            }
+        }
         
         // If implicit chunking (Chunk hidden) and no packet-based encodings (RQ/RS/Repeat),
         // we must join segments before applying stream encodings (gzip/etc).
@@ -521,14 +586,36 @@ impl Deframer {
         let has_packet_enc = pre_fixed.iter().any(|e| matches!(e, ContentEncoding::Chunk(_) | ContentEncoding::Repeat(_) | ContentEncoding::RaptorQ(_, _, _) | ContentEncoding::ReedSolomon(_, _)));
         
         if !has_packet_enc && !segments.is_empty() {
-            // Append Chunk encoding so it runs first in reverse (joining segments)
-            pre_fixed.push(ContentEncoding::Chunk(0));
+            let is_frag = merged.total_chunks.unwrap_or(1) > 1 || merged.chunk_id.unwrap_or(0) > 0;
+            if !is_frag && segments.len() == 1 {
+                 // Phase 1 handled it completely.
+                 pre_fixed.clear();
+            } else {
+                // Append Chunk encoding so it runs first in reverse (joining segments)
+                pre_fixed.push(ContentEncoding::Chunk(0));
+            }
+        } else if lsi != -1 {
+            // Filter pre_fixed: only keep encodings BEFORE or AT lsi.
+            if (lsi as usize) + 1 <= pre_fixed.len() {
+                 pre_fixed.truncate((lsi + 1) as usize);
+            }
+        } else {
+             // lsi == -1 but has_packet_enc is TRUE? 
+             // Should not happen as lsi logic matches has_packet_enc logic.
+             // Unless encodings definition differs?
+             // But if so, we fall through here.
+             // Replicate the check just in case.
+             let is_frag = merged.total_chunks.unwrap_or(1) > 1 || merged.chunk_id.unwrap_or(0) > 0;
+             if !is_frag && segments.len() == 1 {
+                 pre_fixed.clear();
+             }
         }
 
         // 1. Session-level reassembly/decoding
         let mut data = match self.apply_decodings_multi(segments, &pre_fixed, Some(&merged), false) {
             Ok((d, _)) => d,
-            Err(_e) => {
+            Err(e) => {
+                eprintln!("DEBUG: complete_message apply_decodings_multi failed: {}", e);
                 return;
             }
         };
