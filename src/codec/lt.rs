@@ -100,7 +100,7 @@ pub struct LTEncoder {
 impl LTEncoder {
     pub fn new(mut data: Vec<u8>, symbol_size: usize) -> Self {
         // Pad
-        if data.len() % symbol_size != 0 {
+        if !data.len().is_multiple_of(symbol_size) {
             let pad_len = symbol_size - (data.len() % symbol_size);
             data.extend(std::iter::repeat_n(0, pad_len));
         }

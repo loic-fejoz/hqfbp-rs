@@ -397,8 +397,7 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
                 continue;
             }
 
-            for bit in 0..2 {
-                let (next_s, p1, p2) = transitions[s][bit];
+            for (bit, &(next_s, p1, p2)) in transitions[s].iter().enumerate() {
                 let dist = ((r1 ^ p1) + (r2 ^ p2)) as usize;
                 let new_dist = metrics[s] + dist;
 
