@@ -126,29 +126,29 @@ impl SimulationMetrics {
             let diff = original_payload[i] ^ decoded_payload[i];
             self.total_residual_bit_errors += diff.count_ones() as usize;
         }
-        self.total_residual_bit_errors += (original_payload.len() as isize - decoded_payload.len() as isize).abs() as usize * 8;
+        self.total_residual_bit_errors += (original_payload.len() as isize - decoded_payload.len() as isize).unsigned_abs() * 8;
     }
 
     fn report(&self, format: Format) -> String {
-        let efficiency = (self.total_payload_bits as f64 / self.total_bits_sent as f64 * 100.0).max(0.0).min(100.0);
-        let packet_loss_rate = (self.pdus_lost as f64 / self.total_pdus_sent as f64 * 100.0).max(0.0).min(100.0);
-        let file_loss_rate = ((self.files_attempted as f64 - self.files_recovered as f64) / self.files_attempted as f64 * 100.0).max(0.0).min(100.0);
-        let overhead = ((self.header_bits as f64 + self.padding_bits as f64) / self.total_bits_sent as f64 * 100.0).max(0.0).min(100.0);
-        let fec_recovery = (self.files_recovered as f64 / self.files_attempted as f64 * 100.0).max(0.0).min(100.0);
+        let efficiency = (self.total_payload_bits as f64 / self.total_bits_sent as f64 * 100.0).clamp(0.0, 100.0);
+        let packet_loss_rate = (self.pdus_lost as f64 / self.total_pdus_sent as f64 * 100.0).clamp(0.0, 100.0);
+        let file_loss_rate = ((self.files_attempted as f64 - self.files_recovered as f64) / self.files_attempted as f64 * 100.0).clamp(0.0, 100.0);
+        let overhead = ((self.header_bits as f64 + self.padding_bits as f64) / self.total_bits_sent as f64 * 100.0).clamp(0.0, 100.0);
+        let fec_recovery = (self.files_recovered as f64 / self.files_attempted as f64 * 100.0).clamp(0.0, 100.0);
         let rber = self.total_residual_bit_errors as f64 / self.total_bits_evaluated as f64;
         let air_ber = self.total_bit_errors_introduced as f64 / self.total_bits_on_air as f64;
 
         let mut data = std::collections::BTreeMap::new();
         data.insert("Total Bytes Sent".to_string(), (self.total_bits_sent / 8).to_string());
-        data.insert("Packet Loss Rate (%)".to_string(), format!("{:.2}", packet_loss_rate));
-        data.insert("File Loss Rate (%)".to_string(), format!("{:.2}", file_loss_rate));
-        data.insert("Bit Error Rate (on air)".to_string(), format!("{:.2e}", air_ber));
+        data.insert("Packet Loss Rate (%)".to_string(), format!("{packet_loss_rate:.2}"));
+        data.insert("File Loss Rate (%)".to_string(), format!("{file_loss_rate:.2}"));
+        data.insert("Bit Error Rate (on air)".to_string(), format!("{air_ber:.2e}"));
         data.insert("Bit Errors Introduced".to_string(), self.total_bit_errors_introduced.to_string());
-        data.insert("Residual Bit Error Rate".to_string(), format!("{:.2e}", rber));
-        data.insert("FEC Recovery Rate (%)".to_string(), format!("{:.2}", fec_recovery));
-        data.insert("Transmission Efficiency (%)".to_string(), format!("{:.2}", efficiency));
+        data.insert("Residual Bit Error Rate".to_string(), format!("{rber:.2e}"));
+        data.insert("FEC Recovery Rate (%)".to_string(), format!("{fec_recovery:.2}"));
+        data.insert("Transmission Efficiency (%)".to_string(), format!("{efficiency:.2}"));
         data.insert("Max Burst Loss".to_string(), self.max_burst_loss.to_string());
-        data.insert("Protocol Overhead (%)".to_string(), format!("{:.2}", overhead));
+        data.insert("Protocol Overhead (%)".to_string(), format!("{overhead:.2}"));
 
         match format {
             Format::Json => serde_json::to_string_pretty(&data).unwrap(),
@@ -171,7 +171,7 @@ impl SimulationMetrics {
                 output.push_str(&format!("| {:<k_width$} | {:<v_width$} |\n", "Metric", "Value", k_width=k_width, v_width=v_width));
                 output.push_str(&format!("| {:-<k_width$} | {:-<v_width$} |\n", "", "", k_width=k_width, v_width=v_width));
                 for (k, v) in data {
-                    output.push_str(&format!("| {:<k_width$} | {:<v_width$} |\n", k, v, k_width=k_width, v_width=v_width));
+                    output.push_str(&format!("| {k:<k_width$} | {v:<v_width$} |\n"));
                 }
                 output
             }
@@ -230,7 +230,7 @@ fn main() -> Result<()> {
             1,
         );
         
-        let pdus = generator.generate(&source_data, None).map_err(|e| anyhow!("Generator failed: {}", e))?;
+        let pdus = generator.generate(&source_data, None).map_err(|e| anyhow!("Generator failed: {e}"))?;
         if args.debug {
             eprintln!("Generated {} PDUs for file", pdus.len());
         }
@@ -259,7 +259,7 @@ fn main() -> Result<()> {
         let mut noisy_deframer = Deframer::new();
         let mut recovered = false;
         
-        for (_i, (clean_pdu, expected_payload)) in clean_pdus_info.iter().enumerate() {
+        for (clean_pdu, expected_payload) in clean_pdus_info.iter() {
             let (noisy_pdu, errors_in_pdu) = channel.process(clean_pdu);
             
             noisy_deframer.receive_bytes(&noisy_pdu);

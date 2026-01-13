@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Build and Release
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: hqfbp-linux-x86_64
+            bin_suffix: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: hqfbp-windows-x86_64
+            bin_suffix: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/pack${{ matrix.bin_suffix }} staging/
+          cp target/${{ matrix.target }}/release/unpack${{ matrix.bin_suffix }} staging/
+          cp target/${{ matrix.target }}/release/simulate${{ matrix.bin_suffix }} staging/
+          cp target/${{ matrix.target }}/release/check_rs${{ matrix.bin_suffix }} staging/
+          cd staging
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a ../${{ matrix.artifact_name }}.zip *
+          else
+            tar czf ../${{ matrix.artifact_name }}.tar.gz *
+          fi
+          
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            hqfbp-linux-x86_64.tar.gz
+            hqfbp-windows-x86_64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

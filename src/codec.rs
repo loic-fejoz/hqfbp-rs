@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, bail};
-use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
+use crc::{Crc, CRC_32_ISO_HDLC};
 use reed_solomon::Encoder as RSEncoder;
 use reed_solomon::Decoder as RSDecoder;
 use raptorq::{Encoder as RQEncoder};
@@ -72,14 +72,14 @@ pub fn brotli_decompress(data: &[u8]) -> Result<Vec<u8>> {
 pub fn lzma_compress(data: &[u8]) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     lzma_rs::xz_compress(&mut Cursor::new(data), &mut res)
-        .map_err(|e| anyhow!("XZ compress failed: {}", e))?;
+        .map_err(|e| anyhow!("XZ compress failed: {e}"))?;
     Ok(res)
 }
 
 pub fn lzma_decompress(data: &[u8]) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     lzma_rs::xz_decompress(&mut Cursor::new(data), &mut res)
-        .map_err(|e| anyhow!("XZ decompress failed: {}", e))?;
+        .map_err(|e| anyhow!("XZ decompress failed: {e}"))?;
     Ok(res)
 }
 
@@ -119,11 +119,11 @@ pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
 
 pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
     if n > 255 || k == 0 || k > n {
-        bail!("Invalid RS parameters: n={}, k={}", n, k);
+        bail!("Invalid RS parameters: n={n}, k={k}");
     }
     let ecc_len = n - k;
     let encoder = RSEncoder::new(ecc_len);
-    let mut encoded = Vec::with_capacity((data.len() + k - 1) / k * n);
+    let mut encoded = Vec::with_capacity(data.len().div_ceil(k) * n);
     
     for chunk in data.chunks(k) {
         // Systematic RS: Input data preserved at the beginning.
@@ -151,7 +151,7 @@ pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
 
 pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
     if n > 255 || k == 0 || k >= n {
-        bail!("Invalid RS parameters: n={}, k={}", n, k);
+        bail!("Invalid RS parameters: n={n}, k={k}");
     }
     let ecc_len = n - k;
     let decoder = RSDecoder::new(ecc_len);
@@ -205,7 +205,7 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
                 total_corrected += err_count;
             }
             Err(e) => {
-                bail!("RS decode failed: {:?}", e);
+                bail!("RS decode failed: {e:?}");
             }
         }
     }
@@ -258,9 +258,7 @@ pub fn conv_encode(data: &[u8], k: usize, rate: &str) -> Result<Vec<u8>> {
             input_bits.push((b >> i) & 1);
         }
     }
-    for _ in 0..6 {
-        input_bits.push(0);
-    }
+    input_bits.extend(std::iter::repeat_n(0, 6));
     
     for bit in input_bits {
         state = ((state << 1) | bit) & 0x7F;
@@ -280,7 +278,7 @@ pub fn conv_encode(data: &[u8], k: usize, rate: &str) -> Result<Vec<u8>> {
         state &= 0x3F;
     }
     
-    let mut res = Vec::with_capacity((bits.len() + 7) / 8);
+    let mut res = Vec::with_capacity(bits.len().div_ceil(8));
     for chunk in bits.chunks(8) {
         let mut byte_val = 0u8;
         for (idx, &b) in chunk.iter().enumerate() {
@@ -301,21 +299,21 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     let num_states = 1 << (k - 1);
     
     let mut transitions = vec![[(0usize, 0u8, 0u8); 2]; num_states];
-    for s in 0..num_states {
-        for bit in 0..2 {
-            let new_full_state = ((s as u8) << 1) | (bit as u8);
-            let mut p1 = 0u8;
-            let mut p2 = 0u8;
-            for i in 0..7 {
-                if (g1 >> i) & 1 != 0 {
-                    p1 ^= (new_full_state >> i) & 1;
-                }
-                if (g2 >> i) & 1 != 0 {
-                    p2 ^= (new_full_state >> i) & 1;
-                }
+    for (s, rules) in transitions.iter_mut().enumerate().take(num_states) {
+    for (bit, rule) in rules.iter_mut().enumerate() {
+        let new_full_state = ((s as u8) << 1) | (bit as u8);
+        let mut p1 = 0u8;
+        let mut p2 = 0u8;
+        for i in 0..7 {
+            if (g1 >> i) & 1 != 0 {
+                p1 ^= (new_full_state >> i) & 1;
             }
-            transitions[s][bit] = ((new_full_state & 0x3F) as usize, p1, p2);
+            if (g2 >> i) & 1 != 0 {
+                p2 ^= (new_full_state >> i) & 1;
+            }
         }
+        *rule = ((new_full_state & 0x3F) as usize, p1, p2);
+    }
     }
     
     let mut metrics = vec![usize::MAX; num_states];
@@ -409,7 +407,7 @@ mod tests {
     fn test_rs_noisy() {
         let n = 255;
         let k = 223;
-        let mut data = vec![0x42u8; 223];
+        let data = vec![0x42u8; 223];
         let mut encoded = rs_encode(&data, n, k).unwrap();
         
         // Flip one byte (symbol)

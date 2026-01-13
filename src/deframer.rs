@@ -49,6 +49,12 @@ fn split_encs(encs: &[ContentEncoding]) -> (Vec<ContentEncoding>, Vec<ContentEnc
 }
 
 
+impl Default for Deframer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Deframer {
     pub fn new() -> Self {
         Self {
@@ -67,10 +73,9 @@ impl Deframer {
         // Late Truncation: Fix the payload size based on the header BEFORE decodings.
         // This removes padding from layers like RS or RQ that might have been applied to the PDU.
         let mut current_payload = payload;
-        if let Some(size) = header.payload_size {
-            if current_payload.len() > size as usize {
+        if let Some(size) = header.payload_size 
+            && current_payload.len() > size as usize {
                 current_payload = current_payload.slice(..size as usize);
-            }
         }
 
         let is_fragmented = header.total_chunks.unwrap_or(1) > 1 || header.chunk_id.unwrap_or(0) > 0;
@@ -132,7 +137,7 @@ impl Deframer {
                 let (_, post, _) = split_encs(&ce);
 
                 // Apply PDU-level decodings to the WHOLE PDU
-                match self.apply_decodings(b_data.clone(), &post, Some(&h_peek), false) {
+                match self.apply_decodings(b_data.clone(), &post, Some(h_peek), false) {
                     Ok((clean_pdu, q)) => {
                         if let Ok((mut h2, p2)) = unpack(clean_pdu.clone()) {
                             self.strip_post_h_encodings(&mut h2);
@@ -155,7 +160,7 @@ impl Deframer {
                         let is_ann = h_peek.media_type() == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())) || 
                                      h_peek.media_type() == Some(MediaType::Format(60));
                         if is_ann {
-                             eprintln!("DEBUG: Phase 1 Announcement failed: {}", e);
+                             eprintln!("DEBUG: Phase 1 Announcement failed: {e}");
                         }
                     }
                 }
@@ -165,14 +170,11 @@ impl Deframer {
                 payload = Some(p_peek.clone());
                 _decoded_pdu_level = true;
             }
-        } else {
         }
 
         // 2. Phase 2: Heuristic Recovery
         if header.is_none() || payload.is_none() {
             let ann_keys: Vec<_> = self.announcements.keys().cloned().collect();
-            if !ann_keys.is_empty() {
-            }
             let mut reclaimed_any = false;
             
             for key in ann_keys {
@@ -181,8 +183,8 @@ impl Deframer {
                 
                 // 2a. Try decoding JUST the current packet (Per-PDU FEC)
                 let mut single_success = false;
-                if let Ok((clean_pdu, q)) = self.apply_decodings_multi(vec![b_data.clone()], &post, None, false) {
-                     if let Ok((mut h2, p2)) = unpack(clean_pdu) {
+                if let Ok((clean_pdu, q)) = self.apply_decodings_multi(vec![b_data.clone()], &post, None, false)
+                     && let Ok((mut h2, p2)) = unpack(clean_pdu) {
                         self.strip_post_h_encodings(&mut h2);
                         if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
                             let src_c = h2.src_callsign.clone();
@@ -197,53 +199,16 @@ impl Deframer {
                                 } else { false }
                             } else { false };
 
-                            self.process_pdu(h2, p3, new_quality);
-                            reclaimed_any = true;
-                            single_success = true;
-                            
-                             if !already_had_better {
-                                  // We made progress. Should we clear buffer?
-                                  // For Per-PDU FEC, previous buffer contents usually irrelevant for THIS packet,
-                                  // but might be needed for OTHER packets. 
-                                  // But if we decoded this one, we don't need it in buffer.
-                                  // So we shouldn't add it to not_yet_decoded.
-                             }
-                        }
-                    }
-                }
-                
-                // 2a. Try decoding JUST the current packet (Per-PDU FEC)
-                let mut single_success = false;
-                match self.apply_decodings_multi(vec![b_data.clone()], &post, None, false) {
-                    Ok((clean_pdu, q)) => {
-                         if let Ok((mut h2, p2)) = unpack(clean_pdu) {
-                            self.strip_post_h_encodings(&mut h2);
-                            if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
-                                let src_c = h2.src_callsign.clone();
-                                let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
-                                let session_key = (src_c, orig_id);
-                                let chunk_id = h2.chunk_id.unwrap_or(0);
-                                let new_quality = q + q_gain;
-                                 
-                                let already_had_better = if let Some(s) = self.sessions.get(&session_key) {
-                                    if let Some(existing) = s.chunks.get(&chunk_id) {
-                                        existing.1 >= new_quality
-                                    } else { false }
-                                } else { false };
-
+                            if !already_had_better {
                                 self.process_pdu(h2, p3, new_quality);
                                 reclaimed_any = true;
                                 single_success = true;
                             }
                         }
-                    }
-                    Err(_e) => {
-                         // eprintln!("DEBUG: Phase 2 single attempt failed: {}", e);
-                    }
                 }
                 
                 if single_success {
-                    continue; 
+                    continue;
                 }
 
                 // If post contains ONLY packet-local encodings (RS, CRC, Scrambler), 
@@ -289,7 +254,7 @@ impl Deframer {
                                 }
                             }
                             Err(e) => {
-                                eprintln!("DEBUG: unpack failed: {}", e);
+                                eprintln!("DEBUG: unpack failed: {e}");
                             }
                         }
                     }
@@ -325,7 +290,7 @@ impl Deframer {
                 ContentEncoding::Identity => {}
                 ContentEncoding::Repeat(count) => {
                     if current.len() > 1 {
-                        current = current.into_iter().step_by(*count as usize).collect();
+                        current = current.into_iter().step_by(*count).collect();
                     }
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, _) => {
@@ -391,10 +356,8 @@ impl Deframer {
             if let Some(ce) = &header.content_encoding {
                 let ce_list_pdu = ce_to_list(ce);
                 let (pre_ann, _, has_h_ann) = split_encs(&ce_list_pdu);
-                if has_h_ann {
-                    if let Ok((p2, _)) = self.apply_decodings(a_payload.clone(), &pre_ann, Some(&header), false) {
+                if has_h_ann && let Ok((p2, _)) = self.apply_decodings(a_payload.clone(), &pre_ann, Some(&header), false) {
                         a_payload = p2;
-                    }
                 }
             }
             self.handle_announcement(src_callsign, &a_payload);
@@ -408,7 +371,7 @@ impl Deframer {
         let total_chunks = header.total_chunks.unwrap_or(1);
         let chunk_id = header.chunk_id.unwrap_or(0);
         
-        // eprintln!("DEBUG: process_pdu mid={:?}, total={}, chunk={}, p_len={}", header.message_id, total_chunks, chunk_id, payload.len());
+        eprintln!("DEBUG: apply_pdu mid={:?}, ce={:?}, total={}, chunk={}, p_len={}", header.message_id, header.content_encoding, total_chunks, chunk_id, payload.len());
 
         let session = self.sessions.entry(session_key.clone()).or_insert_with(|| Session {
             chunks: HashMap::new(),
@@ -432,7 +395,7 @@ impl Deframer {
                     let (pre, _, _) = split_encs(&ce.0);
                     for enc in pre {
                         if let ContentEncoding::RaptorQ(rq_len, mtu, _) = enc {
-                            rq_k = Some((rq_len + mtu as usize - 1) / mtu as usize);
+                            rq_k = Some(rq_len.div_ceil(mtu as usize));
                             break;
                         }
                     }
@@ -456,26 +419,24 @@ impl Deframer {
     }
 
     fn handle_announcement(&mut self, src: Option<String>, payload: &[u8]) {
-        if let Ok(h) = minicbor::decode::<Header>(payload) {
-            if let (Some(mid), Some(ce)) = (h.message_id, h.content_encoding) {
+        if let Ok(h) = minicbor::decode::<Header>(payload)
+            && let (Some(mid), Some(ce)) = (h.message_id, h.content_encoding) {
                 let ice = ce_to_list(&ce);
                 self.announcements.insert((src, mid), ice);
-            }
         }
     }
 
 
 
     fn strip_post_h_encodings(&self, h: &mut Header) {
-        if let Some(ce) = &mut h.content_encoding {
-            if let Some(pos) = ce.0.iter().position(|e| matches!(e, ContentEncoding::H)) {
+        if let Some(ce) = &mut h.content_encoding
+            && let Some(pos) = ce.0.iter().position(|e| matches!(e, ContentEncoding::H)) {
                 let pre = ce.0[..pos].to_vec();
                 if pre.is_empty() {
                     h.content_encoding = None;
                 } else {
                     h.content_encoding = Some(EncodingList(pre));
                 }
-            }
         }
     }
 
@@ -537,7 +498,7 @@ impl Deframer {
                     data = Bytes::from(scr_xor(&data, *poly));
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, _) => {
-                    data = Bytes::from(rq_decode(vec![data], *rq_len as usize, *mtu)?);
+                    data = Bytes::from(rq_decode(vec![data], *rq_len, *mtu)?);
                     quality += 10;
                 }
                 ContentEncoding::RaptorQDynamic(mtu, _) => {
@@ -596,7 +557,7 @@ impl Deframer {
             }
         } else if lsi != -1 {
             // Filter pre_fixed: only keep encodings BEFORE or AT lsi.
-            if (lsi as usize) + 1 <= pre_fixed.len() {
+            if (lsi as usize) < pre_fixed.len() {
                  pre_fixed.truncate((lsi + 1) as usize);
             }
         } else {
@@ -615,28 +576,26 @@ impl Deframer {
         let mut data = match self.apply_decodings_multi(segments, &pre_fixed, Some(&merged), false) {
             Ok((d, _)) => d,
             Err(e) => {
-                eprintln!("DEBUG: complete_message apply_decodings_multi failed: {}", e);
+                eprintln!("DEBUG: complete_message apply_decodings_multi failed: {e}");
                 return;
             }
         };
 
         // 2. Handle nesting (if the reassembled content is another HQFBP PDU)
-        if let Ok((h_inner, p_inner)) = unpack(data.clone()) {
-            if h_inner.message_id.is_some() {
+        if let Ok((h_inner, p_inner)) = unpack(data.clone()) 
+            && h_inner.message_id.is_some() {
                 let inner_ce = h_inner.content_encoding.as_ref().map(ce_to_list).unwrap_or_default();
                 let (pre_inner, _, _) = split_encs(&inner_ce);
                 if let Ok((p_inner2, _)) = self.apply_decodings(p_inner, &pre_inner, Some(&h_inner), false) {
                     merged = h_inner;
                     data = p_inner2;
                 }
-            }
         }
 
         // 3. Truncate to file size if specified
-        if let Some(size) = merged.file_size {
-            if data.len() > size as usize {
+        if let Some(size) = merged.file_size
+            && data.len() > size as usize {
                 data = data.slice(..size as usize);
-            }
         }
         
         // 4. Update final header: remove 'h' and all encodings up to reassembly limit

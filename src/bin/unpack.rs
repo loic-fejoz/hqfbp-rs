@@ -52,8 +52,7 @@ impl KISSDeFramer {
                 }
             } else if byte == FESC {
                 self.escaped = true;
-            } else {
-                if self.escaped {
+            } else if self.escaped {
                     if byte == TFEND {
                         self.buffer.push(FEND);
                     } else if byte == TFESC {
@@ -65,13 +64,10 @@ impl KISSDeFramer {
                 } else {
                     self.buffer.push(byte);
                 }
-            }
-        } else {
-            if byte == FEND {
-                self.in_frame = true;
-                self.buffer.clear();
-                self.escaped = false;
-            }
+        } else if byte == FEND {
+            self.in_frame = true;
+            self.buffer.clear();
+            self.escaped = false;
         }
         None
     }
@@ -85,7 +81,7 @@ fn main() -> Result<()> {
     println!("Saving files to: {}", fs::canonicalize(&args.output)?.display());
 
     let mut input: Box<dyn Read> = if let Some(addr) = args.tcp {
-        println!("Connecting to KISS-over-TCP server at {}...", addr);
+        println!("Connecting to KISS-over-TCP server at {addr}...");
         Box::new(TcpStream::connect(addr).context("Failed to connect to TCP server")?)
     } else if args.input == "-" {
         println!("Reading from: stdin");
@@ -104,8 +100,8 @@ fn main() -> Result<()> {
         if n == 0 { break; }
 
         for &byte in &buffer[..n] {
-            if let Some(frame) = kiss_decoder.process_byte(byte) {
-                if frame.len() > 1 && frame[0] == 0x00 {
+            if let Some(frame) = kiss_decoder.process_byte(byte) 
+                && frame.len() > 1 && frame[0] == 0x00 {
                     let pdu = &frame[1..];
                     deframer.receive_bytes(pdu);
                     print!(".");
@@ -118,18 +114,17 @@ fn main() -> Result<()> {
                             let callsign = me.header.src_callsign.as_deref().unwrap_or("UNKNOWN");
                             let ext = me.header.content_type.as_deref()
                                 .and_then(|ct| mime_guess::get_mime_extensions_str(ct).and_then(|exts| exts.first()))
-                                .map(|e| format!(".{}", e))
+                                .map(|e| format!(".{e}"))
                                 .unwrap_or_else(|| ".bin".to_string());
 
                             let timestamp = Utc::now().format("%Y-%m-%d-%H%M%S-UTC");
-                            let filename = format!("{}-{}{}", timestamp, callsign, ext);
+                            let filename = format!("{timestamp}-{callsign}{ext}");
                             let filepath = Path::new(&args.output).join(&filename);
 
                             let mut file = File::create(&filepath)?;
                             file.write_all(&me.payload)?;
                             println!("✅ Received {} ({} bytes)", filename, me.payload.len());
                         }
-                    }
                 }
             }
         }

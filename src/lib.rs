@@ -18,7 +18,7 @@ pub enum MediaType {
 impl MediaType {
     pub fn to_mime(&self) -> String {
         match self {
-            MediaType::Format(id) => rev_coap_content_formats().get(id).map(|s| s.to_string()).unwrap_or_else(|| format!("application/x-coap-{}", id)),
+            MediaType::Format(id) => rev_coap_content_formats().get(id).map(|s| s.to_string()).unwrap_or_else(|| format!("application/x-coap-{id}")),
             MediaType::Type(s) => s.clone(),
         }
     }
@@ -282,15 +282,15 @@ impl std::fmt::Display for ContentEncoding {
             ContentEncoding::Lzma => write!(f, "lzma"),
             ContentEncoding::Crc16 => write!(f, "crc16"),
             ContentEncoding::Crc32 => write!(f, "crc32"),
-            ContentEncoding::ReedSolomon(n, k) => write!(f, "rs({},{})", n, k),
-            ContentEncoding::RaptorQ(len, mtu, rep) => write!(f, "rq({},{},{})", len, mtu, rep),
-            ContentEncoding::RaptorQDynamic(mtu, rep) => write!(f, "rq(dlen,{},{})", mtu, rep),
-            ContentEncoding::Conv(k, r) => write!(f, "conv({},{})", k, r),
-            ContentEncoding::Scrambler(p) => write!(f, "scr(0x{:x})", p),
-            ContentEncoding::Chunk(s) => write!(f, "chunk({})", s),
-            ContentEncoding::Repeat(n) => write!(f, "repeat({})", n),
-            ContentEncoding::OtherString(s) => write!(f, "{}", s),
-            ContentEncoding::OtherInteger(i) => write!(f, "{}", i),
+            ContentEncoding::ReedSolomon(n, k) => write!(f, "rs({n},{k})"),
+            ContentEncoding::RaptorQ(len, mtu, rep) => write!(f, "rq({len},{mtu},{rep})"),
+            ContentEncoding::RaptorQDynamic(mtu, rep) => write!(f, "rq(dlen,{mtu},{rep})"),
+            ContentEncoding::Conv(k, r) => write!(f, "conv({k},{r})"),
+            ContentEncoding::Scrambler(p) => write!(f, "scr(0x{p:x})"),
+            ContentEncoding::Chunk(s) => write!(f, "chunk({s})"),
+            ContentEncoding::Repeat(n) => write!(f, "repeat({n})"),
+            ContentEncoding::OtherString(s) => write!(f, "{s}"),
+            ContentEncoding::OtherInteger(i) => write!(f, "{i}"),
         }
     }
 }
@@ -316,7 +316,11 @@ impl TryFrom<&str> for ContentEncoding {
             Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
         } else if let Some(m) = get_scr_re().captures(s) {
             let ps = &m[1];
-            let p = if ps.starts_with("0x") { u64::from_str_radix(&ps[2..], 16)? } else { ps.parse()? };
+            let p = if let Some(stripped) = ps.strip_prefix("0x") {
+                u64::from_str_radix(stripped, 16)?
+            } else {
+                ps.parse()?
+            };
             Ok(ContentEncoding::Scrambler(p))
         } else if let Some(m) = get_chunk_re().captures(s) {
             Ok(ContentEncoding::Chunk(m[1].parse()?))
@@ -461,7 +465,7 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
 
     let mut buf = Vec::new();
     let mut encoder = Encoder::new(&mut buf);
-    encoder.encode(&h).map_err(|e| anyhow!("Header encode failed: {}", e))?;
+    encoder.encode(&h).map_err(|e| anyhow!("Header encode failed: {e}"))?;
     let header_len = buf.len();
     buf.extend_from_slice(payload);
     eprintln!("DEBUG: pack h_len={}, p_len={}, total={}", header_len, payload.len(), buf.len());
@@ -473,7 +477,7 @@ pub fn unpack(data: Bytes) -> Result<(Header, Bytes)> {
     let header: Header = match decoder.decode() {
         Ok(h) => h,
         Err(e) => {
-            bail!("Header decode failed: {}", e);
+            bail!("Header decode failed: {e}");
         }
     };
     if header.message_id.is_none() && header.content_type.as_deref() != Some("application/vnd.hqfbp+cbor") {

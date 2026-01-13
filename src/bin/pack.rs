@@ -115,11 +115,11 @@ fn main() -> Result<()> {
     let pdus = generator.generate(&data, Some(MediaType::Type(content_type)))?;
 
     let mut out: Box<dyn Write> = if let Some(addr) = args.tcp {
-        println!("Connecting to KISS-over-TCP server at {}...", addr);
+        println!("Connecting to KISS-over-TCP server at {addr}...");
         Box::new(TcpStream::connect(addr).context("Failed to connect to TCP server")?)
     } else {
         let output_path = args.output.unwrap_or_else(|| format!("{}.kiss", args.filepath));
-        println!("Writing to KISS file {}...", output_path);
+        println!("Writing to KISS file {output_path}...");
         Box::new(File::create(&output_path).context("Failed to create output file")?)
     };
 
@@ -130,6 +130,6 @@ fn main() -> Result<()> {
         count += 1;
     }
 
-    println!("Successfully sent/packed {} frames.", count);
+    println!("Successfully sent/packed {count} frames.");
     Ok(())
 }

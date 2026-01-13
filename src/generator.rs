@@ -76,12 +76,12 @@ impl PDUGenerator {
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, repairs) => {
                     let res = rq_encode(&current_data, *rq_len, *mtu, *repairs)?;
-                    return Ok(res.into_iter().map(Bytes::from).collect());
+                    return Ok(res.into_iter().collect());
                 }
                 ContentEncoding::RaptorQDynamic(mtu, repairs) => {
                     let rq_len = current_data.len();
                     let res = rq_encode(&current_data, rq_len, *mtu, *repairs)?;
-                    return Ok(res.into_iter().map(Bytes::from).collect());
+                    return Ok(res.into_iter().collect());
                 }
                 ContentEncoding::Conv(k, rate) => {
                     current_data = conv_encode(&current_data, *k, rate)?;
@@ -108,8 +108,8 @@ impl PDUGenerator {
         
         let has_chunk = pre.iter().any(|e| matches!(e, ContentEncoding::Chunk(_)));
 
-        if !has_chunk {
-            if let Some(limit) = self.max_payload_size {
+        if !has_chunk 
+            && let Some(limit) = self.max_payload_size {
                 let mut new_encs = Vec::new();
                 for (i, e) in encs.iter().enumerate() {
                     if i == boundary_idx {
@@ -118,7 +118,6 @@ impl PDUGenerator {
                     new_encs.push(e.clone());
                 }
                 return new_encs;
-            }
         }
 
         encs
