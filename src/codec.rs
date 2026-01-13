@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow, bail};
 use crc::{Crc, CRC_16_XMODEM, CRC_32_ISO_HDLC};
 use reed_solomon::Encoder as RSEncoder;
 use reed_solomon::Decoder as RSDecoder;
-use raptorq::{Encoder as RQEncoder, Decoder as RQDecoder};
+use raptorq::{Encoder as RQEncoder};
 use bytes::Bytes;
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -21,7 +21,17 @@ pub const ENCODING_REGISTRY: &[(i8, &str)] = &[
 ];
 
 pub fn crc16_ccitt(data: &[u8]) -> [u8; 2] {
-    let crc = Crc::<u16>::new(&CRC_16_XMODEM);
+    const CRC_16_PYTHON: crc::Algorithm<u16> = crc::Algorithm { 
+        width: 16, 
+        poly: 0x1021, 
+        init: 0xffff, 
+        refin: false, 
+        refout: false, 
+        xorout: 0x0000, 
+        check: 0x29b1,
+        residue: 0x0000
+    };
+    let crc = Crc::<u16>::new(&CRC_16_PYTHON);
     crc.checksum(data).to_be_bytes()
 }
 
@@ -116,34 +126,36 @@ pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
     let mut encoded = Vec::with_capacity((data.len() + k - 1) / k * n);
     
     for chunk in data.chunks(k) {
-        // Shortened block: we pad with zeros at the beginning for the library
-        // but we only transmit the actual data + parity.
-        let internal_pad = k - chunk.len();
-        let mut block_for_lib = vec![0u8; internal_pad];
-        block_for_lib.extend_from_slice(chunk);
+        // Systematic RS: Input data preserved at the beginning.
+        // Python reedsolo appends zeros for padding: data.ljust(k, b'\0')
+        // We MUST do the same for bit-accuracy.
+        let mut block_for_lib = chunk.to_vec();
+        block_for_lib.resize(k, 0); // Appends zeros
         
-        // Now wrap to 255 for the library
         let lib_pad = 255 - n;
+        // Match the "pre-pad to 255" strategy but keep chunk at the start.
         let mut full_codeword_for_lib = vec![0u8; lib_pad];
         full_codeword_for_lib.extend_from_slice(&block_for_lib);
         
+        // Systematic RS means it returns [data_part, parity]
         let encoded_full_codeword = encoder.encode(&full_codeword_for_lib);
         
-        // The parity is the last ecc_len bytes
         let parity = &encoded_full_codeword[255 - ecc_len..];
-        encoded.extend_from_slice(chunk);
+        
+        // Python transmits the full 'n' bytes (including the k-len padded block)
+        encoded.extend_from_slice(&block_for_lib);
         encoded.extend_from_slice(parity);
     }
     Ok(encoded)
 }
 
 pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
-    if n > 255 || k == 0 || k > n {
+    if n > 255 || k == 0 || k >= n {
         bail!("Invalid RS parameters: n={}, k={}", n, k);
     }
     let ecc_len = n - k;
     let decoder = RSDecoder::new(ecc_len);
-    let mut decoded = Vec::with_capacity(data.len() / n * k);
+    let mut decoded = Vec::with_capacity(data.len().checked_div(n).unwrap_or(0) * k);
     let mut total_corrected = 0;
 
     let mut i = 0;
@@ -153,22 +165,42 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
         let chunk = &data[i..i + block_len];
         i += block_len;
 
+        if block_len < n {
+             // In Python-accurate mode, blocks are ALWAYS n bytes because we pad during encode.
+             // If we got a shorter block, it's either an error or we need to pad it.
+             // But if we want bit-accuracy, we should probably expect n.
+             // However, for robustness, let's treat it as a truncated block.
+        }
+        
         if block_len <= ecc_len {
             bail!("RS block too short to contain parity");
         }
         
         let lib_pad = 255 - n;
-        let internal_pad = n - block_len;
-        let mut full_codeword = vec![0u8; lib_pad + internal_pad];
+        // In encode, we did: [lib_pad, chunk_padded_to_k]
+        // chunk here is [data_part, parity]
+        let mut full_codeword = vec![0u8; lib_pad];
         full_codeword.extend_from_slice(chunk);
         
-        if full_codeword.len() != 255 {
-            bail!("Internal error: RS codeword length is {}, expected 255", full_codeword.len());
+        // If chunk was shorter than n, we need to pad it to n (which means padding the data part)
+        // Wait, if chunk is [data, parity] and data is shorter than k.
+        // We should have [data, pad_to_k, parity].
+        // If chunk is just [data, parity], it's ambiguous.
+        // But since we aligned encode to always produce n bytes, we expect block_len == n.
+        if full_codeword.len() < 255 {
+            let needed = 255 - full_codeword.len();
+            // We must insert the padding BEFORE the parity.
+            let parity_part = &full_codeword[full_codeword.len() - ecc_len..];
+            let mut new_fw = full_codeword[..full_codeword.len() - ecc_len].to_vec();
+            new_fw.resize(new_fw.len() + needed, 0);
+            new_fw.extend_from_slice(parity_part);
+            full_codeword = new_fw;
         }
 
         match decoder.correct_err_count(&full_codeword, None) {
             Ok((corrected, err_count)) => {
-                let dpart = &corrected[255 - block_len..255 - ecc_len];
+                // Decoded data is from lib_pad to lib_pad + k
+                let dpart = &corrected[lib_pad..lib_pad + k];
                 decoded.extend_from_slice(dpart);
                 total_corrected += err_count;
             }
@@ -192,9 +224,16 @@ pub fn rq_encode(data: &[u8], original_count: usize, mtu: u16, repair_count: u32
 }
 
 pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
+    // Standard HQFBP alignment is 1-4. Python uses 1 by default often.
+    // Let's try 1 for alignment.
     let oti = raptorq::ObjectTransmissionInformation::new(original_count as u64, mtu, 1, 1, 1);
-    let mut decoder = RQDecoder::new(oti);
+    let mut decoder = raptorq::Decoder::new(oti);
+    
     for packet_bytes in packets {
+        if packet_bytes.len() < 4 {
+            continue;
+        }
+        
         let packet = raptorq::EncodingPacket::deserialize(packet_bytes.as_ref());
         if let Some(res) = decoder.decode(packet) {
             return Ok(res);
@@ -367,15 +406,17 @@ mod tests {
     }
 
     #[test]
-    fn test_rs_shortened() {
+    fn test_rs_noisy() {
         let n = 255;
         let k = 223;
-        let data = vec![0x42u8; 100];
-        let encoded = rs_encode(&data, n, k).unwrap();
-        assert_eq!(encoded.len(), 132);
+        let mut data = vec![0x42u8; 223];
+        let mut encoded = rs_encode(&data, n, k).unwrap();
+        
+        // Flip one byte (symbol)
+        encoded[10] ^= 0xFF;
         
         let (decoded, corrected) = rs_decode(&encoded, n, k).unwrap();
-        assert_eq!(decoded, data);
-        assert_eq!(corrected, 0);
+        assert_eq!(decoded, data, "Should have corrected one byte error");
+        assert_eq!(corrected, 1);
     }
 }

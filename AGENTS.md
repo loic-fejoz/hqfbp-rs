@@ -24,6 +24,8 @@ Read these specialized docs in `agent_docs/` before starting specific tasks:
 3. **[Conventions](file:///home/loic/projets/hqfbp-rs/agent_docs/conventions.md):** Protocol-specific patterns (Boundary markers, quality metrics). Read before any implementation work.
 
 > [!IMPORTANT]
+> **Python Reference Implementation**
+> - The reference implementation is available at https://github.com/loic-fejoz/py-hqfbp/ and also most probably in a local repository at `../py-hqfbp`.
 > **Verification Requirement:**
 > - You MUST verify all changes. Passing `cargo test` and maintaining high recovery rates in `cargo run --bin simulate` is required for all PRs.
 > - **Zero Regression Rule:** EVERY bug fix MUST include a corresponding unit test (in `tests/` or `tests/test_regressions.rs`) that fails without the fix and passes with it.

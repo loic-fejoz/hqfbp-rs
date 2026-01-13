@@ -78,6 +78,11 @@ impl PDUGenerator {
                     let res = rq_encode(&current_data, *rq_len, *mtu, *repairs)?;
                     return Ok(res.into_iter().map(Bytes::from).collect());
                 }
+                ContentEncoding::RaptorQDynamic(mtu, repairs) => {
+                    let rq_len = current_data.len();
+                    let res = rq_encode(&current_data, rq_len, *mtu, *repairs)?;
+                    return Ok(res.into_iter().map(Bytes::from).collect());
+                }
                 ContentEncoding::Conv(k, rate) => {
                     current_data = conv_encode(&current_data, *k, rate)?;
                 }
@@ -90,7 +95,7 @@ impl PDUGenerator {
         Ok(vec![Bytes::from(current_data)])
     }
 
-    fn resolve_encodings(&self) -> Vec<ContentEncoding> {
+    pub fn resolve_encodings(&self) -> Vec<ContentEncoding> {
         let mut encs = self.encodings.clone();
         
         let has_boundary = encs.iter().any(|e| matches!(e, ContentEncoding::H));
@@ -121,7 +126,7 @@ impl PDUGenerator {
 
     pub fn generate(&mut self, data: &[u8], media_type: Option<MediaType>) -> Result<Vec<Bytes>> {
         let file_size = data.len() as u64;
-        let full_encs = self.resolve_encodings();
+        let mut full_encs = self.resolve_encodings();
         let mut current_chunks = vec![Bytes::copy_from_slice(data)];
         
         let ann_msg_id = if self.announcement_encoder.is_some() {
@@ -139,7 +144,8 @@ impl PDUGenerator {
         };
         header_template.set_media_type(media_type);
 
-        for enc in &full_encs {
+        for i in 0..full_encs.len() {
+            let enc = full_encs[i].clone();
             if matches!(enc, ContentEncoding::H) {
                 let total_chunks = current_chunks.len() as u32;
                 let mut new_chunks = Vec::new();
@@ -185,7 +191,7 @@ impl PDUGenerator {
             } else if let ContentEncoding::Repeat(count) = enc {
                 let mut next_chunks = Vec::new();
                 for chunk in current_chunks {
-                    for _ in 0..*count {
+                    for _ in 0..count {
                         next_chunks.push(chunk.clone());
                     }
                 }
@@ -193,7 +199,13 @@ impl PDUGenerator {
             } else {
                 let mut next_chunks = Vec::new();
                 for c in &current_chunks {
-                    let transformed = self.apply_encodings(c.clone(), &[enc.clone()])?;
+                    let mut actual_enc = enc.clone();
+                    if let ContentEncoding::RaptorQDynamic(mtu, repairs) = actual_enc {
+                        actual_enc = ContentEncoding::RaptorQ(c.len(), mtu, repairs);
+                        // Update full_encs for the header
+                        full_encs[i] = actual_enc.clone();
+                    }
+                    let transformed = self.apply_encodings(c.clone(), &[actual_enc])?;
                     next_chunks.extend(transformed);
                 }
                 current_chunks = next_chunks;

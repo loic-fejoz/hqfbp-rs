@@ -10,9 +10,9 @@ PY_PACK = src/hqfbp/pack.py
 PY_UNPACK = src/hqfbp/unpack.py
 PYTHON_UV = cd ../py-hqfbp && uv run python3
 
-.PHONY: all clean test-tcp-rust test-tcp-py test-cross-tcp
+.PHONY: all clean test-tcp-rust test-tcp-py test-cross-tcp test-py-bench
 
-all: test-tcp-rust test-tcp-py test-cross-tcp
+all: test-tcp-rust test-tcp-py test-cross-tcp test-py-bench
 
 clean:
 	rm -rf $(OUT_DIR_RS) $(OUT_DIR_PY) test_tcp.kiss
@@ -87,3 +87,7 @@ pack-img:
 		--tcp 127.0.0.1:8001 \
 		--encodings "gzip,h,chunk(223),rs(255,223),repeat(2)" \
 		--ann-encodings "h,crc32,repeat(2)"
+
+test-py-bench:
+	@echo "Running cross-implementation benchmark against Python samples"
+	python3 scripts/test_against_py_samples.py ../py-hqfbp/samples

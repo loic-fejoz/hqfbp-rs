@@ -63,25 +63,47 @@ pub struct Header {
 impl<'b, C> Decode<'b, C> for Header {
     fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
         let mut h = Header::default();
-        let len = d.map()?.unwrap_or(0);
-        for _ in 0..len {
-            let key = d.u8()?;
-            match key {
-                0 => h.message_id = Some(d.u32()?),
-                1 => h.src_callsign = Some(d.str()?.to_string()),
-                2 => h.dst_callsign = Some(d.str()?.to_string()),
-                3 => h.content_format = Some(d.u16()?),
-                4 => h.content_type = Some(d.str()?.to_string()),
-                5 => h.content_encoding = Some(d.decode()?),
-                6 => h.repr_digest = Some(d.bytes()?.to_vec()),
-                7 => h.content_digest = Some(d.bytes()?.to_vec()),
-                8 => h.file_size = Some(d.u64()?),
-                9 => h.chunk_id = Some(d.u32()?),
-                10 => h.original_message_id = Some(d.u32()?),
-                11 => h.total_chunks = Some(d.u32()?),
-                12 => h.payload_size = Some(d.u64()?),
-                _ => { d.skip()?; }
+        if let Some(len) = d.map()? {
+            for _ in 0..len {
+                let key = d.u32()?;
+                match key {
+                    0 => h.message_id = Some(d.u32()?),
+                    1 => h.src_callsign = Some(d.str()?.to_string()),
+                    2 => h.dst_callsign = Some(d.str()?.to_string()),
+                    3 => h.content_format = Some(d.u16()?),
+                    4 => h.content_type = Some(d.str()?.to_string()),
+                    5 => h.content_encoding = Some(d.decode()?),
+                    6 => h.repr_digest = Some(d.bytes()?.to_vec()),
+                    7 => h.content_digest = Some(d.bytes()?.to_vec()),
+                    8 => h.file_size = Some(d.u64()?),
+                    9 => h.chunk_id = Some(d.u32()?),
+                    10 => h.original_message_id = Some(d.u32()?),
+                    11 => h.total_chunks = Some(d.u32()?),
+                    12 => h.payload_size = Some(d.u64()?),
+                    _ => { d.skip()?; }
+                }
             }
+        } else {
+            while d.datatype()? != minicbor::data::Type::Break {
+                let key = d.u32()?;
+                match key {
+                    0 => h.message_id = Some(d.u32()?),
+                    1 => h.src_callsign = Some(d.str()?.to_string()),
+                    2 => h.dst_callsign = Some(d.str()?.to_string()),
+                    3 => h.content_format = Some(d.u16()?),
+                    4 => h.content_type = Some(d.str()?.to_string()),
+                    5 => h.content_encoding = Some(d.decode()?),
+                    6 => h.repr_digest = Some(d.bytes()?.to_vec()),
+                    7 => h.content_digest = Some(d.bytes()?.to_vec()),
+                    8 => h.file_size = Some(d.u64()?),
+                    9 => h.chunk_id = Some(d.u32()?),
+                    10 => h.original_message_id = Some(d.u32()?),
+                    11 => h.total_chunks = Some(d.u32()?),
+                    12 => h.payload_size = Some(d.u64()?),
+                    _ => { d.skip()?; }
+                }
+            }
+            d.skip()?;
         }
         Ok(h)
     }
@@ -222,6 +244,7 @@ impl Header {
 
 fn get_rs_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap()) }
 fn get_rq_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap()) }
+fn get_rq_dyn_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"rq\(dlen,\s*(\d+),\s*(\d+)\)").unwrap()) }
 fn get_conv_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap()) }
 fn get_scr_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap()) }
 fn get_chunk_re() -> &'static Regex { static RE: OnceLock<Regex> = OnceLock::new(); RE.get_or_init(|| Regex::new(r"chunk\((\d+)\)").unwrap()) }
@@ -239,6 +262,7 @@ pub enum ContentEncoding {
     Crc32,
     ReedSolomon(usize, usize),
     RaptorQ(usize, u16, u32),
+    RaptorQDynamic(u16, u32),
     Conv(usize, String),
     Scrambler(u64),
     Chunk(usize),
@@ -260,6 +284,7 @@ impl std::fmt::Display for ContentEncoding {
             ContentEncoding::Crc32 => write!(f, "crc32"),
             ContentEncoding::ReedSolomon(n, k) => write!(f, "rs({},{})", n, k),
             ContentEncoding::RaptorQ(len, mtu, rep) => write!(f, "rq({},{},{})", len, mtu, rep),
+            ContentEncoding::RaptorQDynamic(mtu, rep) => write!(f, "rq(dlen,{},{})", mtu, rep),
             ContentEncoding::Conv(k, r) => write!(f, "conv({},{})", k, r),
             ContentEncoding::Scrambler(p) => write!(f, "scr(0x{:x})", p),
             ContentEncoding::Chunk(s) => write!(f, "chunk({})", s),
@@ -285,6 +310,8 @@ impl TryFrom<&str> for ContentEncoding {
             Ok(ContentEncoding::ReedSolomon(m[1].parse()?, m[2].parse()?))
         } else if let Some(m) = get_rq_re().captures(s) {
             Ok(ContentEncoding::RaptorQ(m[1].parse()?, m[2].parse()?, m[3].parse()?))
+        } else if let Some(m) = get_rq_dyn_re().captures(s) {
+            Ok(ContentEncoding::RaptorQDynamic(m[1].parse()?, m[2].parse()?))
         } else if let Some(m) = get_conv_re().captures(s) {
             Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
         } else if let Some(m) = get_scr_re().captures(s) {
@@ -377,8 +404,9 @@ impl<'b, C> Decode<'b, C> for EncodingList {
 
 impl<C> Encode<C> for EncodingList {
     fn encode<W: minicbor::encode::Write>(&self, e: &mut Encoder<W>, _ctx: &mut C) -> Result<(), minicbor::encode::Error<W::Error>> {
-        if self.0.len() == 1 {
-            match &self.0[0] {
+        let filtered: Vec<_> = self.0.iter().filter(|e| !matches!(e, ContentEncoding::Chunk(_))).collect();
+        if filtered.len() == 1 {
+            match filtered[0] {
                 ContentEncoding::OtherString(s) => { e.str(s)?; }
                 other => {
                     let i: i8 = other.clone().into();
@@ -389,9 +417,13 @@ impl<C> Encode<C> for EncodingList {
                     }
                 }
             }
+        } else if filtered.is_empty() {
+             // If all were chunks, it becomes identity? Or just omit.
+             // Usually there's at least 'h'.
+             e.i8(0)?; // identity
         } else {
-            e.array(self.0.len() as u64)?;
-            for item in &self.0 {
+            e.array(filtered.len() as u64)?;
+            for item in filtered {
                 let i: i8 = item.clone().into();
                 if i != 127 {
                     e.i8(i)?;
@@ -430,7 +462,9 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
     let mut buf = Vec::new();
     let mut encoder = Encoder::new(&mut buf);
     encoder.encode(&h).map_err(|e| anyhow!("Header encode failed: {}", e))?;
+    let header_len = buf.len();
     buf.extend_from_slice(payload);
+    eprintln!("DEBUG: pack h_len={}, p_len={}, total={}", header_len, payload.len(), buf.len());
     Ok(Bytes::from(buf))
 }
 
@@ -446,14 +480,7 @@ pub fn unpack(data: Bytes) -> Result<(Header, Bytes)> {
         bail!("Decoded header is missing identifying fields (message_id or content_type)");
     }
     let pos = decoder.position();
-    let mut payload = data.slice(pos..);
-    
-    // Trim payload based on payload_size if present
-    if let Some(size) = header.payload_size {
-        if payload.len() > size as usize {
-            payload = payload.slice(..size as usize);
-        }
-    }
+    let payload = data.slice(pos..);
     
     Ok((header, payload))
 }
