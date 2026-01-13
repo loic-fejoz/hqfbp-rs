@@ -8,6 +8,12 @@ To provide a high-performance, robust Rust implementation of the **Hamradio Quic
 - **Test:** `cargo test` (Run this ALWAYS before submitting changes)
 - **Check/Lint:** `cargo clippy`
 - **Format:** `cargo fmt`
+- **Output Control:** Use `-v` or `--verbose` with any binary to enable `DEBUG` logs.
+
+## Output Standards
+- **Stdout:** For final results, reports, or machine-readable output (e.g., SIM results, KISS frames).
+- **Stderr/Logging:** For diagnostics, status updates, and progress bars. 
+- **Standard Library:** Use the `log` crate macros (`info!`, `debug!`, etc.) for all library diagnostics. binary-level `eprintln!` is allowed only for non-recoverable errors or critical CLI status.
 
 ## Project Map
 - `src/lib.rs`: Atomic types (`Header`, `EncodingList`) and `unpack` primitive.

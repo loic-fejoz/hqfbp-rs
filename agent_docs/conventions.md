@@ -28,5 +28,11 @@ This document outlines implementation logic patterns to maintain protocol consis
 - **Pattern:** Use `OnceLock` within a getter function for lazy, thread-safe initialization of regexes, mapping tables, or other heavy statics.
 - **Example:** See `src/lib.rs` for `get_rs_re()` or `hqfbp_cbor_keys()` implementations.
 
+## 7. Logging & Verbosity
+- **Standard Library:** Use the `log` crate for all library-internal diagnostics.
+- **Macros:** Favor `debug!` for detailed trace information (e.g., packet header bits, XOR logic) and `info!` for high-level events (e.g., message completion).
+- **Tool Integration:** Every binary in `src/bin` must initialize `env_logger` in `main` and provide a `-v` / `--verbose` flag to toggle the log level from `LevelFilter::Info` to `LevelFilter::Debug`.
+- **Output Hygiene:** Library code MUST NOT use `println!` or `eprintln!`. All diagnostics must go through logging macros to ensure binaries have control over the output.
+
 > [!NOTE]
 > **Coding Style:** Follow standard Rust idiomatic patterns. Run `cargo fmt` and `cargo clippy` to enforce baseline quality without cluttering this guide.

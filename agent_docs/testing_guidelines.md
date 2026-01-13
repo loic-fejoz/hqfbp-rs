@@ -16,6 +16,9 @@ Used to verify high-level performance metrics.
 ```bash
 # Run a 100-iteration simulation at 10⁻³ BER
 cargo run --bin simulate -- --ber 1e-3 --limit 100 --encodings gzip,h,rs(120,100) --ann-encodings h,crc16 --file-size 1024
+
+# Enable detailed library logging with -v
+cargo run --bin simulate -- -v --ber 1e-4 --limit 1 --encodings h
 ```
 Refer to [tests/test_rs_power.rs](file:///home/loic/projets/hqfbp-rs/tests/test_rs_power.rs) for an example of automated power-testing.
 
