@@ -26,6 +26,8 @@ def run_explorer(args, thread_id):
         "--format", "csv"
     ]
     
+    print(f"[Thread {thread_id}] Starting {cmd}...")
+
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -185,7 +187,7 @@ def main():
         executor.submit(run_explorer, args, i)
 
     print(f"Starting Dash server on http://127.0.0.1:{args.port}")
-    app.run(port=args.port, debug=True)
+    app.run(port=args.port, debug=False)
 
 if __name__ == "__main__":
     main()

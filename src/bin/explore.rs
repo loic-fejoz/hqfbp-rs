@@ -204,6 +204,8 @@ fn main() -> Result<()> {
 
             let mut clean_pdus_info = Vec::new();
             let mut clean_deframer = Deframer::new();
+            // clean_deframer needs to know the encoding to "ground truth" decode even opaque packets
+            clean_deframer.register_announcement(Some("EXPLR".to_string()), 1, enc_list.0.clone());
 
             for pdu in &pdus {
                 clean_deframer.receive_bytes(pdu);

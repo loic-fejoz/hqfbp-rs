@@ -554,30 +554,89 @@ impl Deframer {
                 ContentEncoding::Brotli => data = Bytes::from(brotli_decompress(&data)?),
                 ContentEncoding::Lzma => data = Bytes::from(lzma_decompress(&data)?),
                 ContentEncoding::Crc32 => {
-                    if data.len() < 4 {
-                        bail!("too short for crc32");
+                    let mut valid_len = None;
+                    // First try full length
+                    if data.len() >= 4 {
+                        let payload = data.slice(..data.len() - 4);
+                        let expected = &data[data.len() - 4..];
+                        if crc32_std(&payload) == expected {
+                            valid_len = Some(payload.len());
+                        }
                     }
-                    let payload = data.slice(..data.len() - 4);
-                    let expected = &data[data.len() - 4..];
 
-                    if crc32_std(&payload) != expected {
+                    // If failed, try stripping potential padding (e.g. from RS)
+                    // We assume padding is at the end. We assume reasonably small padding
+                    // or just scan backwards.
+                    // Since padding might be scrambled (if Scr is between RS and CRC),
+                    // we cannot rely on it being zero.
+                    if valid_len.is_none() && data.len() > 4 {
+                        // Heuristic: Check smaller sizes.
+                        // Limit to e.g. 255 bytes (typical Max RS block padding) to avoid performance issues.
+                        // Or just check all reasonable lengths?
+                        // Let's check up to 256 bytes from the end or start.
+                        let mut test_len = data.len() - 1;
+                        let min_len = if data.len() > 300 {
+                            data.len() - 256
+                        } else {
+                            4
+                        };
+
+                        while test_len >= min_len {
+                            // Check if [..test_len] is a valid block (payload + CRC)
+                            let payload_check_len = test_len - 4;
+                            let payload = data.slice(..payload_check_len);
+                            let expected = &data[payload_check_len..test_len];
+                            if crc32_std(&payload) == expected {
+                                valid_len = Some(payload.len());
+                                break;
+                            }
+                            test_len -= 1;
+                        }
+                    }
+
+                    if let Some(vl) = valid_len {
+                        data = data.slice(..vl);
+                        quality += 1000;
+                    } else {
                         bail!("crc32 fail");
                     }
-                    data = payload;
-                    quality += 1000;
                 }
                 ContentEncoding::Crc16 => {
-                    if data.len() < 2 {
-                        bail!("too short for crc16");
+                    let mut valid_len = None;
+                    if data.len() >= 2 {
+                        let payload = data.slice(..data.len() - 2);
+                        let expected = &data[data.len() - 2..];
+                        if crc16_ccitt(&payload) == expected {
+                            valid_len = Some(payload.len());
+                        }
                     }
-                    let payload = data.slice(..data.len() - 2);
-                    let expected = &data[data.len() - 2..];
 
-                    if crc16_ccitt(&payload) != expected {
+                    if valid_len.is_none() && data.len() > 2 {
+                        let mut test_len = data.len() - 1;
+                        let min_len = if data.len() > 300 {
+                            data.len() - 256
+                        } else {
+                            2
+                        };
+
+                        while test_len >= min_len {
+                            let payload_check_len = test_len - 2;
+                            let payload = data.slice(..payload_check_len);
+                            let expected = &data[payload_check_len..test_len];
+                            if crc16_ccitt(&payload) == expected {
+                                valid_len = Some(payload.len());
+                                break;
+                            }
+                            test_len -= 1;
+                        }
+                    }
+
+                    if let Some(vl) = valid_len {
+                        data = data.slice(..vl);
+                        quality += 1000;
+                    } else {
                         bail!("crc16 fail");
                     }
-                    data = payload;
-                    quality += 1000;
                 }
                 ContentEncoding::ReedSolomon(n, k) => match rs_decode(&data, *n, *k) {
                     Ok((d2, corrected)) => {
