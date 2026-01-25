@@ -173,98 +173,125 @@ fn main() -> Result<()> {
             .collect::<Vec<_>>()
             .join(",");
 
-        let mut metrics = SimulationMetrics::new();
+        use rayon::prelude::*;
 
-        for _ in 0..args.limit {
-            let size = if args.file_size < 0 {
-                rng.gen_range(10..=(args.file_size.abs() as usize))
-            } else {
-                args.file_size as usize
-            };
-            let mut source_data = vec![0u8; size];
-            rng.fill_bytes(&mut source_data);
+        let results: SimulationMetrics = (0..args.limit)
+            .into_par_iter()
+            .map(|_| {
+                let mut local_rng = rand::thread_rng();
+                let size = if args.file_size < 0 {
+                    local_rng.gen_range(10..=(args.file_size.abs() as usize))
+                } else {
+                    args.file_size as usize
+                };
+                let mut source_data = vec![0u8; size];
+                local_rng.fill_bytes(&mut source_data);
 
-            metrics.files_attempted += 1;
-            let mut generator = PDUGenerator::new(
-                Some("EXPLR".to_string()),
-                None,
-                None,
-                Some(enc_list.0.clone()),
-                None,
-                1,
-            );
+                let mut m = SimulationMetrics::new();
+                m.files_attempted = 1;
 
-            let pdus = match generator.generate(&source_data, None) {
-                Ok(pdus) => pdus,
-                Err(e) => {
-                    log::warn!("Generator failed for {}: {}", enc_str, e);
-                    continue;
-                }
-            };
+                let mut generator = PDUGenerator::new(
+                    Some("EXPLR".to_string()),
+                    None,
+                    None,
+                    Some(enc_list.0.clone()),
+                    None,
+                    1,
+                );
 
-            let mut clean_pdus_info = Vec::new();
-            let mut clean_deframer = Deframer::new();
-            // clean_deframer needs to know the encoding to "ground truth" decode even opaque packets
-            clean_deframer.register_announcement(Some("EXPLR".to_string()), 1, enc_list.0.clone());
+                let pdus = match generator.generate(&source_data, None) {
+                    Ok(pdus) => pdus,
+                    Err(e) => {
+                        log::warn!("Generator failed for {}: {}", enc_str, e);
+                        return m;
+                    }
+                };
 
-            for pdu in &pdus {
-                clean_deframer.receive_bytes(pdu);
-                while let Some(ev) = clean_deframer.next_event() {
-                    if let Event::PDU(pe) = ev {
-                        clean_pdus_info.push((pdu.clone(), pe.payload));
+                let mut clean_pdus_info = Vec::new();
+                let mut clean_deframer = Deframer::new();
+                clean_deframer.register_announcement(
+                    Some("EXPLR".to_string()),
+                    1,
+                    enc_list.0.clone(),
+                );
+
+                for pdu in &pdus {
+                    clean_deframer.receive_bytes(pdu);
+                    while let Some(ev) = clean_deframer.next_event() {
+                        if let Event::PDU(pe) = ev {
+                            clean_pdus_info.push((pdu.clone(), pe.payload));
+                        }
                     }
                 }
-            }
 
-            for (pdu, payload) in &clean_pdus_info {
-                let h_size = pdu.len().saturating_sub(payload.len());
-                metrics.header_bits += h_size * 8;
-            }
+                for (pdu, payload) in &clean_pdus_info {
+                    let h_size = pdu.len().saturating_sub(payload.len());
+                    m.header_bits += h_size * 8;
+                }
 
-            if clean_pdus_info.is_empty() {
-                continue;
-            }
+                if clean_pdus_info.is_empty() {
+                    return m;
+                }
 
-            let mut noisy_deframer = Deframer::new();
-            noisy_deframer.register_announcement(Some("EXPLR".to_string()), 1, enc_list.0.clone());
-            let mut recovered = false;
+                let mut noisy_deframer = Deframer::new();
+                noisy_deframer.register_announcement(
+                    Some("EXPLR".to_string()),
+                    1,
+                    enc_list.0.clone(),
+                );
+                let mut recovered = false;
 
-            for (clean_pdu, _) in clean_pdus_info.iter() {
-                metrics.total_pdus_sent += 1;
-                let bits = clean_pdu.len() * 8;
-                metrics.total_bits_sent += bits;
-                metrics.total_bits_on_air += bits;
+                for (clean_pdu, _) in clean_pdus_info.iter() {
+                    m.total_pdus_sent += 1;
+                    let bits = clean_pdu.len() * 8;
+                    m.total_bits_sent += bits;
+                    m.total_bits_on_air += bits;
 
-                let (noisy_pdu, errors_in_pdu) = channel.process(clean_pdu);
-                metrics.total_bit_errors_introduced += errors_in_pdu;
+                    let (noisy_pdu, errors_in_pdu) = channel.process(clean_pdu);
+                    m.total_bit_errors_introduced += errors_in_pdu;
 
-                noisy_deframer.receive_bytes(&noisy_pdu);
+                    noisy_deframer.receive_bytes(&noisy_pdu);
 
-                let mut pdu_accepted = false;
-                while let Some(ev) = noisy_deframer.next_event() {
-                    match ev {
-                        Event::PDU(_) => {
-                            pdu_accepted = true;
-                        }
-                        Event::Message(me) => {
-                            if me.payload.len() == source_data.len() && me.payload == source_data {
-                                recovered = true;
+                    let mut pdu_accepted = false;
+                    while let Some(ev) = noisy_deframer.next_event() {
+                        match ev {
+                            Event::PDU(_) => {
+                                pdu_accepted = true;
+                            }
+                            Event::Message(me) => {
+                                if me.payload.len() == source_data.len()
+                                    && me.payload == source_data
+                                {
+                                    recovered = true;
+                                }
                             }
                         }
                     }
+                    if !pdu_accepted {
+                        m.pdus_lost += 1;
+                    }
                 }
-                if !pdu_accepted {
-                    metrics.pdus_lost += 1;
+
+                if recovered {
+                    m.files_recovered = 1;
+                    m.total_payload_bits = source_data.len() * 8;
                 }
-            }
+                m
+            })
+            .reduce(SimulationMetrics::new, |mut a, b| {
+                a.total_bits_sent += b.total_bits_sent;
+                a.files_attempted += b.files_attempted;
+                a.files_recovered += b.files_recovered;
+                a.total_payload_bits += b.total_payload_bits;
+                a.header_bits += b.header_bits;
+                a.total_bit_errors_introduced += b.total_bit_errors_introduced;
+                a.total_bits_on_air += b.total_bits_on_air;
+                a.pdus_lost += b.pdus_lost;
+                a.total_pdus_sent += b.total_pdus_sent;
+                a
+            });
 
-            if recovered {
-                metrics.files_recovered += 1;
-                metrics.total_payload_bits += source_data.len() * 8;
-            }
-        }
-
-        let res = metrics.get_results(enc_str);
+        let res = results.get_results(enc_str);
 
         match args.format {
             Format::Csv => {

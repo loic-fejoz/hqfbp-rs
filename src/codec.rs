@@ -359,17 +359,26 @@ pub fn conv_encode(data: &[u8], k: usize, rate: &str) -> Result<Vec<u8>> {
     Ok(res)
 }
 
-pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)> {
-    if k != 7 || rate != "1/2" {
-        bail!("Only conv(7, 1/2) is currently supported");
-    }
+use once_cell::sync::Lazy;
 
+struct ConvTransition {
+    next_state: usize,
+    p1: u8,
+    p2: u8,
+}
+
+static CONV_TRANSITIONS: Lazy<[[ConvTransition; 2]; 64]> = Lazy::new(|| {
     let g1 = 0o133u8;
     let g2 = 0o171u8;
-    let num_states = 1 << (k - 1);
+    let mut transitions = std::array::from_fn(|_| {
+        std::array::from_fn(|_| ConvTransition {
+            next_state: 0,
+            p1: 0,
+            p2: 0,
+        })
+    });
 
-    let mut transitions = vec![[(0usize, 0u8, 0u8); 2]; num_states];
-    for (s, rules) in transitions.iter_mut().enumerate().take(num_states) {
+    for (s, rules) in transitions.iter_mut().enumerate() {
         for (bit, rule) in rules.iter_mut().enumerate() {
             let new_full_state = ((s as u8) << 1) | (bit as u8);
             let mut p1 = 0u8;
@@ -382,13 +391,25 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
                     p2 ^= (new_full_state >> i) & 1;
                 }
             }
-            *rule = ((new_full_state & 0x3F) as usize, p1, p2);
+            *rule = ConvTransition {
+                next_state: (new_full_state & 0x3F) as usize,
+                p1,
+                p2,
+            };
         }
     }
+    transitions
+});
 
-    let mut metrics = vec![usize::MAX; num_states];
-    metrics[0] = 0;
-    let mut paths = vec![Vec::new(); num_states];
+pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)> {
+    if k != 7 || rate != "1/2" {
+        bail!("Only conv(7, 1/2) is currently supported");
+    }
+
+    let num_steps = data.len() * 4;
+    if num_steps == 0 {
+        return Ok((Vec::new(), 0));
+    }
 
     let mut input_bits = Vec::with_capacity(data.len() * 8);
     for &b in data {
@@ -397,34 +418,46 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
         }
     }
 
-    for i in (0..input_bits.len().saturating_sub(1)).step_by(2) {
-        let r1 = input_bits[i];
-        let r2 = input_bits[i + 1];
+    let num_steps = input_bits.len() / 2;
+    if num_steps == 0 {
+        return Ok((Vec::new(), 0));
+    }
 
-        let mut new_metrics = vec![usize::MAX; num_states];
-        let mut new_paths = vec![Vec::new(); num_states];
+    let num_states = 64;
+    let mut metrics = vec![u32::MAX; num_states];
+    metrics[0] = 0;
+
+    // predecessor_states[step][state] = (prev_state << 1) | bit
+    let mut predecessor_states = vec![[0u8; 64]; num_steps];
+
+    for step in 0..num_steps {
+        let r1 = input_bits[step * 2];
+        let r2 = input_bits[step * 2 + 1];
+
+        let mut next_metrics = vec![u32::MAX; num_states];
 
         for s in 0..num_states {
-            if metrics[s] == usize::MAX {
+            let current_metric = metrics[s];
+            if current_metric == u32::MAX {
                 continue;
             }
 
-            for (bit, &(next_s, p1, p2)) in transitions[s].iter().enumerate() {
-                let dist = ((r1 ^ p1) + (r2 ^ p2)) as usize;
-                let new_dist = metrics[s] + dist;
+            let trans_bits = &CONV_TRANSITIONS[s];
 
-                if new_dist < new_metrics[next_s] {
-                    new_metrics[next_s] = new_dist;
-                    let mut path = paths[s].clone();
-                    path.push(bit as u8);
-                    new_paths[next_s] = path;
+            for (bit, trans) in trans_bits.iter().enumerate() {
+                let dist = ((r1 ^ trans.p1) + (r2 ^ trans.p2)) as u32;
+                let new_dist = current_metric + dist;
+
+                if new_dist < next_metrics[trans.next_state] {
+                    next_metrics[trans.next_state] = new_dist;
+                    predecessor_states[step][trans.next_state] = (s as u8) << 1 | (bit as u8);
                 }
             }
         }
-        metrics = new_metrics;
-        paths = new_paths;
+        metrics = next_metrics;
     }
 
+    // Backtrack
     let mut best_state = 0;
     let mut min_m = metrics[0];
     for (s, &m) in metrics.iter().enumerate() {
@@ -434,7 +467,17 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
         }
     }
 
-    let mut decoded_bits = paths[best_state].clone();
+    let mut decoded_bits = Vec::with_capacity(num_steps);
+    let mut curr_s = best_state;
+    for step in (0..num_steps).rev() {
+        let entry = predecessor_states[step][curr_s];
+        let prev_s = (entry >> 1) as usize;
+        let bit = entry & 1;
+        decoded_bits.push(bit);
+        curr_s = prev_s;
+    }
+    decoded_bits.reverse();
+
     if decoded_bits.len() > 6 {
         decoded_bits.truncate(decoded_bits.len() - 6);
     } else {
@@ -453,7 +496,7 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
         res.push(byte_val);
     }
 
-    Ok((res, min_m))
+    Ok((res, min_m as usize))
 }
 
 #[cfg(test)]
