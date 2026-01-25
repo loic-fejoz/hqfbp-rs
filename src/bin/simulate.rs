@@ -1,3 +1,14 @@
+/// HQFBP Simulation Engine
+///
+/// This tool simulates the transmission of files over a noisy channel using HQFBP.
+/// It performs the following for each simulation round:
+/// 1. Generates random source data.
+/// 2. Packs the data into PDUs (optionally including an announcement message).
+/// 3. Pass all PDUs (announcements and data) through a bit-error channel.
+/// 4. Attempts to recover the file using a Deframer.
+///
+/// If announcements are used, the Deframer is pre-configured ONLY with the announcement
+/// encoding. It must learn the data encodings by successfully decoding the announcement.
 use anyhow::{Result, anyhow};
 use clap::{Parser, ValueEnum};
 use hqfbp_rs::ContentEncoding;
@@ -85,6 +96,8 @@ struct SimulationMetrics {
     total_residual_bit_errors: usize,
     total_bits_evaluated: usize,
     total_bits_on_air: usize,
+    min_pdu_size: usize,
+    max_pdu_size: usize,
 }
 
 impl SimulationMetrics {
@@ -104,12 +117,17 @@ impl SimulationMetrics {
             total_residual_bit_errors: 0,
             total_bits_evaluated: 0,
             total_bits_on_air: 0,
+            min_pdu_size: usize::MAX,
+            max_pdu_size: 0,
         }
     }
 
     fn add_pdu(&mut self, pdu_bytes: &[u8], lost: bool, errors_in_pdu: usize) {
         self.total_pdus_sent += 1;
-        let bits = pdu_bytes.len() * 8;
+        let pdu_size = pdu_bytes.len();
+        self.min_pdu_size = self.min_pdu_size.min(pdu_size);
+        self.max_pdu_size = self.max_pdu_size.max(pdu_size);
+        let bits = pdu_size * 8;
         self.total_bits_sent += bits;
         self.total_bits_on_air += bits;
         self.total_bit_errors_introduced += errors_in_pdu;
@@ -151,6 +169,17 @@ impl SimulationMetrics {
             (self.files_recovered as f64 / self.files_attempted as f64 * 100.0).clamp(0.0, 100.0);
         let rber = self.total_residual_bit_errors as f64 / self.total_bits_evaluated as f64;
         let air_ber = self.total_bit_errors_introduced as f64 / self.total_bits_on_air as f64;
+        let avg_pdu_size = if self.total_pdus_sent > 0 {
+            (self.total_bits_sent as f64 / 8.0) / self.total_pdus_sent as f64
+        } else {
+            0.0
+        };
+        let min_p = if self.total_pdus_sent > 0 {
+            self.min_pdu_size
+        } else {
+            0
+        };
+        let max_p = self.max_pdu_size;
 
         let mut data = std::collections::BTreeMap::new();
         data.insert(
@@ -190,6 +219,9 @@ impl SimulationMetrics {
             "Protocol Overhead (%)".to_string(),
             format!("{overhead:.2}"),
         );
+        data.insert("Min PDU Size".to_string(), min_p.to_string());
+        data.insert("Avg PDU Size".to_string(), format!("{avg_pdu_size:.2}"));
+        data.insert("Max PDU Size".to_string(), max_p.to_string());
 
         match format {
             Format::Json => serde_json::to_string_pretty(&data).unwrap(),
@@ -286,12 +318,12 @@ fn main() -> Result<()> {
 
     let mut rng = rand::thread_rng();
     let mut source_data = vec![0u8; args.file_size];
-    rng.fill_bytes(&mut source_data);
 
     let encs = parse_encodings(&args.encodings);
     let ann_encs = args.ann_encodings.as_ref().map(|s| parse_encodings(s));
 
     for _ in 0..args.limit {
+        rng.fill_bytes(&mut source_data);
         metrics.files_attempted += 1;
         let mut generator = PDUGenerator::new(
             Some("SIMUL".to_string()),
@@ -308,6 +340,11 @@ fn main() -> Result<()> {
         log::debug!("Generated {} PDUs for file", pdus.len());
         let mut clean_pdus_info = Vec::new();
         let mut clean_deframer = Deframer::new();
+        if let Some(ae) = &ann_encs {
+            clean_deframer.register_announcement(Some("SIMUL".to_string()), 1, ae.clone());
+        } else {
+            clean_deframer.register_announcement(Some("SIMUL".to_string()), 1, encs.clone());
+        }
 
         for pdu in &pdus {
             clean_deframer.receive_bytes(pdu);
@@ -329,6 +366,11 @@ fn main() -> Result<()> {
         }
 
         let mut noisy_deframer = Deframer::new();
+        if let Some(ae) = &ann_encs {
+            noisy_deframer.register_announcement(Some("SIMUL".to_string()), 1, ae.clone());
+        } else {
+            noisy_deframer.register_announcement(Some("SIMUL".to_string()), 1, encs.clone());
+        }
         let mut recovered = false;
 
         for (clean_pdu, expected_payload) in clean_pdus_info.iter() {

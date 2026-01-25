@@ -63,22 +63,23 @@ pub fn generate_sensible_encoding(seed: u64) -> EncodingList {
     }
 
     // Choices for step 4/5 and 1/2
-    let mut rnd_4 = rng.gen_range(0..=3); // Flow Protection: 0: None, 1: None, 2: RQ, 3: LT
+    // let mut rnd_4 = rng.gen_range(0..=3); // Flow Protection: 0: None, 1: None, 2: RQ, 3: LT
     let rnd_1 = rng.gen_range(0..=3); // Segmentation: 0: None, 1: Chunk, 2: RQ, 3: LT
 
     // Reroll if some Fountain Code are picked twice (Reduce probability of duplicates)
-    if rnd_4 >= 2 && rnd_1 >= 2 {
-        if rng.gen_bool(0.8) {
-            rnd_4 = rng.gen_range(0..=3);
-        }
-    }
+    // if rnd_4 >= 2 && rnd_1 >= 2 {
+    //     if rng.gen_bool(0.8) {
+    //         rnd_4 = rng.gen_range(0..=3);
+    //     }
+    // }
 
     // 5. Packet Integrity: Id or CRC
-    let rnd_5 = if rnd_4 >= 2 {
-        rng.gen_range(1..=2) // CRC mandatory if FEC
-    } else {
-        rng.gen_range(0..=2)
-    };
+    // let rnd_5 = if rnd_4 >= 2 {
+    //     rng.gen_range(1..=2) // CRC mandatory if FEC
+    // } else {
+    //     rng.gen_range(0..=2)
+    // };
+    let rnd_5 = rng.gen_range(0..=2);
     match rnd_5 {
         1 => {
             encodings.push(ContentEncoding::Crc16);
@@ -92,27 +93,27 @@ pub fn generate_sensible_encoding(seed: u64) -> EncodingList {
     }
 
     // 4. flow protection
-    match rnd_4 {
-        2 => {
-            // RaptorQ
-            if rng.gen_bool(0.5) {
-                let k = rng.gen_range(50..=100) as u8;
-                encodings.push(ContentEncoding::RaptorQDynamicPercent(
-                    current_mtu as u16,
-                    k,
-                ));
-            } else {
-                let k = rng.gen_range(1..=20) as u32;
-                encodings.push(ContentEncoding::RaptorQDynamic(current_mtu as u16, k));
-            }
-        }
-        3 => {
-            // LT
-            let k = rng.gen_range(1..=20) as u32;
-            encodings.push(ContentEncoding::LTDynamic(current_mtu as u16, k));
-        }
-        _ => {}
-    }
+    // match rnd_4 {
+    //     // 2 => {
+    //     //     // RaptorQ
+    //     //     if rng.gen_bool(0.5) {
+    //     //         let k = rng.gen_range(50..=100) as u8;
+    //     //         encodings.push(ContentEncoding::RaptorQDynamicPercent(
+    //     //             current_mtu as u16,
+    //     //             k,
+    //     //         ));
+    //     //     } else {
+    //     //         let k = rng.gen_range(1..=20) as u32;
+    //     //         encodings.push(ContentEncoding::RaptorQDynamic(current_mtu as u16, k));
+    //     //     }
+    //     // }
+    //     // 3 => {
+    //     //     // LT
+    //     //     let k = rng.gen_range(1..=20) as u32;
+    //     //     encodings.push(ContentEncoding::LTDynamic(current_mtu as u16, k));
+    //     // }
+    //     _ => {}
+    // }
 
     // 3. header
     encodings.push(ContentEncoding::H);

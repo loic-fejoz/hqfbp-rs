@@ -109,11 +109,24 @@ fn bench_complex_deframer(c: &mut Criterion) {
     bench_deframer_stack(c, "deframer_complex_stack_1k", encodings);
 }
 
+fn bench_golay_complex_deframer(c: &mut Criterion) {
+    // rq(dlen, 256, 64), crc32, h, scr(G3RUH), golay(24,12)
+    let encodings = vec![
+        ContentEncoding::RaptorQDynamic(256, 64),
+        ContentEncoding::Crc32,
+        ContentEncoding::H,
+        ContentEncoding::Scrambler(0x21001, None),
+        ContentEncoding::Golay(24, 12),
+    ];
+    bench_deframer_stack(c, "deframer_golay_complex_stack_1k", encodings);
+}
+
 criterion_group!(
     benches,
     bench_unpack,
     bench_deframer_100k,
     bench_opaque_deframer,
-    bench_complex_deframer
+    bench_complex_deframer,
+    bench_golay_complex_deframer
 );
 criterion_main!(benches);

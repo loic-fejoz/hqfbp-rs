@@ -106,6 +106,9 @@ impl PDUGenerator {
                 ContentEncoding::Scrambler(poly, seed) => {
                     current_data = scr_xor(&current_data, *poly, *seed);
                 }
+                ContentEncoding::Golay(_, _) => {
+                    current_data = golay_encode(&current_data)?;
+                }
                 _ => {}
             }
         }

@@ -78,7 +78,6 @@ struct SimulationMetrics {
     files_attempted: usize,
     files_recovered: usize,
     total_payload_bits: usize,
-    header_bits: usize,
     total_bit_errors_introduced: usize,
     total_bits_on_air: usize,
     pdus_lost: usize,
@@ -92,7 +91,6 @@ impl SimulationMetrics {
             files_attempted: 0,
             files_recovered: 0,
             total_payload_bits: 0,
-            header_bits: 0,
             total_bit_errors_introduced: 0,
             total_bits_on_air: 0,
             pdus_lost: 0,
@@ -172,6 +170,7 @@ fn main() -> Result<()> {
             .map(|e| e.to_string())
             .collect::<Vec<_>>()
             .join(",");
+        eprintln!("Testing {}...", enc_str);
 
         use rayon::prelude::*;
 
@@ -207,32 +206,6 @@ fn main() -> Result<()> {
                     }
                 };
 
-                let mut clean_pdus_info = Vec::new();
-                let mut clean_deframer = Deframer::new();
-                clean_deframer.register_announcement(
-                    Some("EXPLR".to_string()),
-                    1,
-                    enc_list.0.clone(),
-                );
-
-                for pdu in &pdus {
-                    clean_deframer.receive_bytes(pdu);
-                    while let Some(ev) = clean_deframer.next_event() {
-                        if let Event::PDU(pe) = ev {
-                            clean_pdus_info.push((pdu.clone(), pe.payload));
-                        }
-                    }
-                }
-
-                for (pdu, payload) in &clean_pdus_info {
-                    let h_size = pdu.len().saturating_sub(payload.len());
-                    m.header_bits += h_size * 8;
-                }
-
-                if clean_pdus_info.is_empty() {
-                    return m;
-                }
-
                 let mut noisy_deframer = Deframer::new();
                 noisy_deframer.register_announcement(
                     Some("EXPLR".to_string()),
@@ -241,7 +214,7 @@ fn main() -> Result<()> {
                 );
                 let mut recovered = false;
 
-                for (clean_pdu, _) in clean_pdus_info.iter() {
+                for clean_pdu in pdus.iter() {
                     m.total_pdus_sent += 1;
                     let bits = clean_pdu.len() * 8;
                     m.total_bits_sent += bits;
@@ -283,7 +256,6 @@ fn main() -> Result<()> {
                 a.files_attempted += b.files_attempted;
                 a.files_recovered += b.files_recovered;
                 a.total_payload_bits += b.total_payload_bits;
-                a.header_bits += b.header_bits;
                 a.total_bit_errors_introduced += b.total_bit_errors_introduced;
                 a.total_bits_on_air += b.total_bits_on_air;
                 a.pdus_lost += b.pdus_lost;

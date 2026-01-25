@@ -8,7 +8,9 @@ use raptorq::Encoder as RQEncoder;
 use reed_solomon::Decoder as RSDecoder;
 use reed_solomon::Encoder as RSEncoder;
 use std::io::{Cursor, Read, Write};
+pub mod golay;
 pub mod lt;
+use golay::{golay_decode as golay_dec, golay_encode as golay_enc};
 use lt::{LTDecoder, LTEncoder};
 
 pub const ENCODING_REGISTRY: &[(i8, &str)] = &[
@@ -497,6 +499,14 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     }
 
     Ok((res, min_m as usize))
+}
+
+pub fn golay_encode(data: &[u8]) -> Result<Vec<u8>> {
+    Ok(golay_enc(data))
+}
+
+pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize)> {
+    golay_dec(data)
 }
 
 #[cfg(test)]

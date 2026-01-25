@@ -359,6 +359,10 @@ fn get_scr_re() -> &'static Regex {
         Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)(,\s*(0x[0-9a-fA-F]+|\d+))?\)").unwrap()
     })
 }
+fn get_golay_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"golay(\((\d+),\s*(\d+)\))?").unwrap())
+}
 fn get_chunk_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"chunk\((\d+)\)").unwrap())
@@ -385,6 +389,7 @@ pub enum ContentEncoding {
     LT(usize, u16, u32),
     LTDynamic(u16, u32),
     Conv(usize, String),
+    Golay(usize, usize),
     Scrambler(u64, Option<u64>),
     Chunk(usize),
     Repeat(usize),
@@ -412,6 +417,13 @@ impl std::fmt::Display for ContentEncoding {
             ContentEncoding::LT(len, mtu, rep) => write!(f, "lt({len},{mtu},{rep})"),
             ContentEncoding::LTDynamic(mtu, rep) => write!(f, "lt(dlen,{mtu},{rep})"),
             ContentEncoding::Conv(k, r) => write!(f, "conv({k},{r})"),
+            ContentEncoding::Golay(n, k) => {
+                if *n == 24 && *k == 12 {
+                    write!(f, "golay")
+                } else {
+                    write!(f, "golay({n},{k})")
+                }
+            }
             ContentEncoding::Scrambler(p, s) => {
                 if let Some(seed) = s {
                     write!(f, "scr(0x{p:x}, 0x{seed:x})")
@@ -469,6 +481,16 @@ impl TryFrom<&str> for ContentEncoding {
             Ok(ContentEncoding::LTDynamic(m[1].parse()?, m[2].parse()?))
         } else if let Some(m) = get_conv_re().captures(s) {
             Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
+        } else if let Some(_) = get_golay_re().captures(s) {
+            let m = get_golay_re().captures(s).unwrap();
+            if let (Some(n), Some(k)) = (m.get(2), m.get(3)) {
+                Ok(ContentEncoding::Golay(
+                    n.as_str().parse()?,
+                    k.as_str().parse()?,
+                ))
+            } else {
+                Ok(ContentEncoding::Golay(24, 12))
+            }
         } else if let Some(m) = get_scr_re().captures(s) {
             let parse_val = |val: &str| -> Result<u64> {
                 if let Some(stripped) = val.strip_prefix("0x") {

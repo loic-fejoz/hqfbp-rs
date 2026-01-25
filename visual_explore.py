@@ -31,7 +31,7 @@ def run_explorer(args, thread_id):
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=open(f"explore_{thread_id}.log", "a"),
         text=True,
         bufsize=1
     )
@@ -52,6 +52,8 @@ def run_explorer(args, thread_id):
             print(f"[Thread {thread_id}] {line}")
             sys.stdout.flush()
             
+            if line.startswith("Testing"):
+                continue
             row_df = pd.read_csv(io.StringIO(f"{header}\n{line}"))
             # Convert numeric columns to ensure proper plotting
             numeric_cols = ["File Size", "Eff (%)", "File Loss (%)", "PDU Loss (%)", "Air-BER"]
@@ -72,9 +74,6 @@ def run_explorer(args, thread_id):
         
     if process.returncode != 0:
         print(f"Explorer in thread {thread_id} exited with code {process.returncode}", file=sys.stderr)
-        stderr_out = process.stderr.read()
-        if stderr_out:
-            print(f"Stderr: {stderr_out}", file=sys.stderr)
 
 def main():
     parser = argparse.ArgumentParser(description="Parallel HQFBP Encoding Explorer with Live Visualization")

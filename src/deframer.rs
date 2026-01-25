@@ -93,6 +93,7 @@ impl Deframer {
                     | ContentEncoding::RaptorQ(_, _, _)
                     | ContentEncoding::ReedSolomon(_, _)
                     | ContentEncoding::LT(_, _, _)
+                    | ContentEncoding::Golay(_, _)
             ) {
                 lsi = i as i32;
             }
@@ -499,6 +500,10 @@ impl Deframer {
         };
 
         if completed {
+            log::debug!(
+                "Session completed for key {:?}. Starting reassembly.",
+                session_key
+            );
             self.complete_message(session_key);
         }
     }
@@ -650,6 +655,11 @@ impl Deframer {
                 ContentEncoding::Scrambler(poly, seed) => {
                     data = Bytes::from(scr_xor(&data, *poly, *seed));
                 }
+                ContentEncoding::Golay(_, _) => {
+                    let (d2, corrected) = golay_decode(&data)?;
+                    data = Bytes::from(d2);
+                    quality += corrected;
+                }
                 ContentEncoding::RaptorQ(rq_len, mtu, _) => {
                     data = Bytes::from(rq_decode(vec![data], *rq_len, *mtu)?);
                     quality += 10;
@@ -679,6 +689,7 @@ impl Deframer {
                 | ContentEncoding::Deflate => {}
             }
         }
+        log::debug!("Decoded PDU quality={}", quality);
         Ok((data, quality))
     }
 
@@ -721,6 +732,7 @@ impl Deframer {
                     | ContentEncoding::RaptorQ(_, _, _)
                     | ContentEncoding::ReedSolomon(_, _)
                     | ContentEncoding::LT(_, _, _)
+                    | ContentEncoding::Golay(_, _)
             ) {
                 lsi = i as i32;
             }
