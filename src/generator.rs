@@ -83,6 +83,14 @@ impl PDUGenerator {
                     let res = rq_encode(&current_data, rq_len, *mtu, *repairs)?;
                     return Ok(res.into_iter().collect());
                 }
+                ContentEncoding::RaptorQDynamicPercent(mtu, percent) => {
+                    let rq_len = current_data.len();
+                    let repairs = 1.max(
+                        (rq_len as f32 * (*percent as f32) / (100.0 * (*mtu as f32))).ceil() as u32,
+                    );
+                    let res = rq_encode(&current_data, rq_len, *mtu, repairs)?;
+                    return Ok(res.into_iter().collect());
+                }
                 ContentEncoding::LT(len, mtu, repairs) => {
                     let res = lt_encode(&current_data, *len, *mtu, *repairs)?;
                     return Ok(res.into_iter().collect());
@@ -95,8 +103,8 @@ impl PDUGenerator {
                 ContentEncoding::Conv(k, rate) => {
                     current_data = conv_encode(&current_data, *k, rate)?;
                 }
-                ContentEncoding::Scrambler(poly) => {
-                    current_data = scr_xor(&current_data, *poly);
+                ContentEncoding::Scrambler(poly, seed) => {
+                    current_data = scr_xor(&current_data, *poly, *seed);
                 }
                 _ => {}
             }

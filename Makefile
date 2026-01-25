@@ -94,21 +94,20 @@ test-py-bench:
 
 simulate-lt-pre:
 	cargo run --release --bin simulate -- --file-size 2048 \
-		--limit 1000 \
+		--limit 5000 \
 	    --ber 0.0001 \
 	    --encodings "lt(dlen,512,10),crc32,h"
 
 simulate-lt-post:
 	cargo run --release --bin simulate -- --file-size 2048 \
-		--limit 1000 \
+		--limit 5000 \
 	    --ber 0.0001 \
-	    --encodings "h,lt(dlen,512,10)" \
+	    --encodings "h,lt(dlen,255,10)" \
 	    --ann-encodings "h,crc32,repeat(3)"
 
-simulate-lt-post:
+simulate-lt-pre-2:
 	cargo run --release --bin simulate -- --file-size 2048 \
-		--limit 1000 \
-	    --ber 0.001 \
-		--verbose \
+		--limit 5000 \
+	    --ber 0.0001 \
 	    --encodings "lt(dlen,156,30),h,rs(255,223)" \
 	    --ann-encodings "h,crc32,repeat(3)"

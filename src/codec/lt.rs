@@ -28,6 +28,12 @@ pub struct RobustSoliton {
 
 impl RobustSoliton {
     pub fn new(k: usize) -> Self {
+        if k == 0 {
+            return Self {
+                k: 0,
+                cdf: vec![1.0],
+            };
+        }
         let c = 0.1;
         let delta = 0.5;
 
@@ -41,10 +47,14 @@ impl RobustSoliton {
         // Robust Component
         let mut tau = vec![0.0; k + 1];
         let s = c * (k as f64 / delta).ln() * (k as f64).sqrt();
-        let limit = (k as f64 / s).round() as usize;
+        let limit = if s > 0.0 {
+            (k as f64 / s).round() as usize
+        } else {
+            1
+        };
 
         for (d, item) in tau.iter_mut().enumerate().take(k + 1).skip(1) {
-            if d < limit - 1 {
+            if d < limit.saturating_sub(1) {
                 // d < K/S - 1? Wait, checking Py logic: d < round(k/s) - 1
                 *item = s / (k as f64) * (1.0 / d as f64);
             } else if d == limit {
@@ -99,6 +109,14 @@ pub struct LTEncoder {
 
 impl LTEncoder {
     pub fn new(mut data: Vec<u8>, symbol_size: usize) -> Self {
+        if symbol_size == 0 || data.is_empty() {
+            return Self {
+                blocks: Vec::new(),
+                k: 0,
+                symbol_size: 0,
+                dist: RobustSoliton::new(0),
+            };
+        }
         // Pad
         if !data.len().is_multiple_of(symbol_size) {
             let pad_len = symbol_size - (data.len() % symbol_size);
@@ -120,6 +138,9 @@ impl LTEncoder {
     }
 
     pub fn encode(&self, repair_count: usize) -> Vec<Vec<u8>> {
+        if self.k == 0 {
+            return Vec::new();
+        }
         let mut pkts = Vec::new();
         let total_count = self.k + repair_count;
 
@@ -172,8 +193,19 @@ pub struct LTDecoder {
 
 impl LTDecoder {
     pub fn new(total_len: usize, symbol_size: usize) -> Self {
+        if symbol_size == 0 || total_len == 0 {
+            return Self {
+                total_len: 0,
+                symbol_size: 0,
+                k: 0,
+                dist: RobustSoliton::new(0),
+                blocks: HashMap::new(),
+                graph: HashMap::new(),
+                block_deps: HashMap::new(),
+            };
+        }
         let k = total_len.div_ceil(symbol_size);
-        let mut block_deps = HashMap::new();
+        let mut block_deps = HashMap::with_capacity(k);
         for i in 0..k {
             block_deps.insert(i, HashSet::new());
         }
@@ -206,7 +238,7 @@ impl LTDecoder {
                 e.insert(payload);
                 self.propagate(esi);
             }
-        } else {
+        } else if self.k > 0 {
             let mut prng = SplitMix64::new(esi as u64);
             let degree = self.dist.sample(&mut prng);
             let mut neighbors = HashSet::new();
@@ -281,6 +313,9 @@ impl LTDecoder {
     }
 
     pub fn get_result(&self) -> Option<Vec<u8>> {
+        if self.k == 0 {
+            return Some(Vec::new());
+        }
         if self.blocks.len() < self.k {
             return None;
         }
@@ -290,5 +325,40 @@ impl LTDecoder {
         }
         res.truncate(self.total_len);
         Some(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_robust_soliton_zero_k() {
+        let rs = RobustSoliton::new(0);
+        assert_eq!(rs.k, 0);
+        // Should not panic on sample
+        let mut prng = SplitMix64::new(42);
+        assert_eq!(rs.sample(&mut prng), 1);
+    }
+
+    #[test]
+    fn test_lt_encoder_decoder_zero_params() {
+        let data = Vec::new();
+        let encoder = LTEncoder::new(data, 100);
+        assert_eq!(encoder.k, 0);
+        let pkts = encoder.encode(10);
+        assert!(pkts.is_empty());
+
+        let decoder = LTDecoder::new(0, 100);
+        assert_eq!(decoder.k, 0);
+        assert!(decoder.get_result().is_some());
+        assert!(decoder.get_result().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_lt_decoder_zero_mtu() {
+        let decoder = LTDecoder::new(100, 0);
+        assert_eq!(decoder.k, 0);
+        assert!(decoder.get_result().is_some());
     }
 }

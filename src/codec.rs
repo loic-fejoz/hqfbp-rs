@@ -85,13 +85,19 @@ pub fn lzma_decompress(data: &[u8]) -> Result<Vec<u8>> {
     Ok(res)
 }
 
-pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
+pub fn scr_xor(data: &[u8], poly_mask: u64, seed: Option<u64>) -> Vec<u8> {
     if poly_mask == 0 {
         return data.to_vec();
     }
 
     let width = 64 - poly_mask.leading_zeros();
-    let mask = (1u64 << width) - 1;
+    let mask = if let Some(seed) = seed {
+        seed
+    } else if width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    };
     let mut state = mask;
 
     let mut res = Vec::with_capacity(data.len());
@@ -272,6 +278,9 @@ pub fn lt_encode(
     mtu: u16,
     repair_count: u32,
 ) -> Result<Vec<Bytes>> {
+    if mtu == 0 || original_count == 0 {
+        return Ok(Vec::new());
+    }
     let mut padded_data = data.to_vec();
     if padded_data.len() < original_count {
         padded_data.resize(original_count, 0);
@@ -284,6 +293,9 @@ pub fn lt_encode(
 }
 
 pub fn lt_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
+    if mtu == 0 || original_count == 0 {
+        return Ok(Vec::new());
+    }
     let mut decoder = LTDecoder::new(original_count, mtu as usize);
 
     for packet_bytes in packets {

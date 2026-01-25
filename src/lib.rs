@@ -8,6 +8,8 @@ use std::sync::OnceLock;
 pub mod codec;
 pub mod deframer;
 pub mod generator;
+pub mod random_encoding;
+pub mod random_sensible_encoding;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaType {
@@ -353,7 +355,9 @@ fn get_conv_re() -> &'static Regex {
 }
 fn get_scr_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)(,\s*(0x[0-9a-fA-F]+|\d+))?\)").unwrap()
+    })
 }
 fn get_chunk_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -377,10 +381,11 @@ pub enum ContentEncoding {
     ReedSolomon(usize, usize),
     RaptorQ(usize, u16, u32),
     RaptorQDynamic(u16, u32),
+    RaptorQDynamicPercent(u16, u8),
     LT(usize, u16, u32),
     LTDynamic(u16, u32),
     Conv(usize, String),
-    Scrambler(u64),
+    Scrambler(u64, Option<u64>),
     Chunk(usize),
     Repeat(usize),
     OtherString(String),
@@ -401,10 +406,19 @@ impl std::fmt::Display for ContentEncoding {
             ContentEncoding::ReedSolomon(n, k) => write!(f, "rs({n},{k})"),
             ContentEncoding::RaptorQ(len, mtu, rep) => write!(f, "rq({len},{mtu},{rep})"),
             ContentEncoding::RaptorQDynamic(mtu, rep) => write!(f, "rq(dlen,{mtu},{rep})"),
+            ContentEncoding::RaptorQDynamicPercent(mtu, percent) => {
+                write!(f, "rq(dlen,{mtu},{percent}%)")
+            }
             ContentEncoding::LT(len, mtu, rep) => write!(f, "lt({len},{mtu},{rep})"),
             ContentEncoding::LTDynamic(mtu, rep) => write!(f, "lt(dlen,{mtu},{rep})"),
             ContentEncoding::Conv(k, r) => write!(f, "conv({k},{r})"),
-            ContentEncoding::Scrambler(p) => write!(f, "scr(0x{p:x})"),
+            ContentEncoding::Scrambler(p, s) => {
+                if let Some(seed) = s {
+                    write!(f, "scr(0x{p:x}, 0x{seed:x})")
+                } else {
+                    write!(f, "scr(0x{p:x})")
+                }
+            }
             ContentEncoding::Chunk(s) => write!(f, "chunk({s})"),
             ContentEncoding::Repeat(n) => write!(f, "repeat({n})"),
             ContentEncoding::OtherString(s) => write!(f, "{s}"),
@@ -456,13 +470,20 @@ impl TryFrom<&str> for ContentEncoding {
         } else if let Some(m) = get_conv_re().captures(s) {
             Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
         } else if let Some(m) = get_scr_re().captures(s) {
-            let ps = &m[1];
-            let p = if let Some(stripped) = ps.strip_prefix("0x") {
-                u64::from_str_radix(stripped, 16)?
-            } else {
-                ps.parse()?
+            let parse_val = |val: &str| -> Result<u64> {
+                if let Some(stripped) = val.strip_prefix("0x") {
+                    Ok(u64::from_str_radix(stripped, 16)?)
+                } else {
+                    Ok(val.parse()?)
+                }
             };
-            Ok(ContentEncoding::Scrambler(p))
+            let p = parse_val(&m[1])?;
+            let seed = if let Some(sm) = m.get(3) {
+                Some(parse_val(sm.as_str())?)
+            } else {
+                None
+            };
+            Ok(ContentEncoding::Scrambler(p, seed))
         } else if let Some(m) = get_chunk_re().captures(s) {
             Ok(ContentEncoding::Chunk(m[1].parse()?))
         } else if let Some(m) = get_repeat_re().captures(s) {

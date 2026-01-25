@@ -77,6 +77,27 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
+## Encoding Exploration
+
+To find the optimal balance between transmission efficiency and reliability, you can use the built-in exploration tools.
+
+### CLI Explorer
+The `explore` binary generates random encodings and simulates their performance under noise.
+
+```bash
+cargo run --release --bin explore -- --nb-encodings 100 --limit 1000 --ber 0.001
+```
+
+### Visual Explorer (Parallel)
+The `visual_explore.py` script runs multiple exploration threads in parallel and provides a live-updating interactive dashboard.
+
+1. Install dependencies: `./.venv/bin/pip install plotly dash pandas`
+2. Run the explorer:
+   ```bash
+   ./.venv/bin/python3 visual_explore.py --n-thread 4 --nb-encodings 100
+   ```
+3. Open `http://127.0.0.1:8050` in your browser to view the Pareto frontier in real-time.
+
 ## Features
 
 - **Bit-Accuracy**: Fully compatible with the Python reference implementation.

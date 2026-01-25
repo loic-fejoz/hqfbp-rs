@@ -8,10 +8,10 @@ fn test_scrambler_roundtrip() {
     let data = b"Scrambler test data with some zeros: \x00\x00\x00\x00";
     let poly = 0x1FF; // NASA-like 9-bit polynomial
 
-    let encoded = scr_xor(data, poly);
+    let encoded = scr_xor(data, poly, None);
     assert_ne!(encoded, data);
 
-    let decoded = scr_xor(&encoded, poly);
+    let decoded = scr_xor(&encoded, poly, None);
     assert_eq!(decoded, data);
 }
 
@@ -22,7 +22,7 @@ fn test_scrambler_whitening() {
     // PRBS-9: x^9 + x^5 + 1 -> binary 100010000 (bits 8 and 4 set) -> 0x110
     let poly = 0x110;
 
-    let encoded = scr_xor(&data, poly);
+    let encoded = scr_xor(&data, poly, None);
 
     // Check that we don't have too many zeros
     let zero_count = encoded.iter().filter(|&&b| b == 0).count();
@@ -46,7 +46,7 @@ fn test_generator_deframer_scrambler_integration() {
         None,
         None,
         Some(vec![
-            ContentEncoding::Scrambler(poly as u64),
+            ContentEncoding::Scrambler(poly as u64, None),
             ContentEncoding::H,
         ]),
         Some(vec![ContentEncoding::Identity]),
@@ -78,10 +78,10 @@ fn test_scrambler_different_polynomials() {
     let p1 = 0x110; // x^9 + x^5 + 1
     let p2 = 0x10800; // x^17 + x^12 + 1
 
-    let e1 = scr_xor(data, p1);
-    let e2 = scr_xor(data, p2);
+    let e1 = scr_xor(data, p1, None);
+    let e2 = scr_xor(data, p2, None);
 
     assert_ne!(e1, e2);
-    assert_eq!(scr_xor(&e1, p1), data);
-    assert_eq!(scr_xor(&e2, p2), data);
+    assert_eq!(scr_xor(&e1, p1, None), data);
+    assert_eq!(scr_xor(&e2, p2, None), data);
 }

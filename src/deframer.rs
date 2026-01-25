@@ -333,8 +333,8 @@ impl Deframer {
                 }
                 ContentEncoding::Identity => {}
                 ContentEncoding::Repeat(count) => {
-                    if current.len() > 1 {
-                        current = current.into_iter().step_by(*count).collect();
+                    if current.len() > 1 && *count > 0 {
+                        current = current.into_iter().step_by(*count as usize).collect();
                     }
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, _) => {
@@ -470,12 +470,20 @@ impl Deframer {
                 if let Some(ce) = &h.content_encoding {
                     let (pre, _, _) = split_encs(&ce.0);
                     for enc in pre {
-                        if let ContentEncoding::RaptorQ(rq_len, mtu, _) = enc {
-                            rq_k = Some(rq_len.div_ceil(mtu as usize));
-                            break;
-                        } else if let ContentEncoding::LT(len, mtu, _) = enc {
-                            rq_k = Some(len.div_ceil(mtu as usize));
-                            break;
+                        match enc {
+                            ContentEncoding::RaptorQ(rq_len, mtu, _) => {
+                                if mtu > 0 {
+                                    rq_k = Some(rq_len.div_ceil(mtu as usize));
+                                    break;
+                                }
+                            }
+                            ContentEncoding::LT(len, mtu, _) => {
+                                if mtu > 0 {
+                                    rq_k = Some(len.div_ceil(mtu as usize));
+                                    break;
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -497,6 +505,15 @@ impl Deframer {
 
     pub fn next_event(&mut self) -> Option<Event> {
         self.events.pop_front()
+    }
+
+    pub fn register_announcement(
+        &mut self,
+        src: Option<String>,
+        mid: u32,
+        encs: Vec<ContentEncoding>,
+    ) {
+        self.announcements.insert((src, mid), encs);
     }
 
     fn handle_announcement(&mut self, src: Option<String>, payload: &[u8]) {
@@ -582,8 +599,8 @@ impl Deframer {
                     data = Bytes::from(d2);
                     quality += (data.len() * 8).saturating_sub(metric);
                 }
-                ContentEncoding::Scrambler(poly) => {
-                    data = Bytes::from(scr_xor(&data, *poly));
+                ContentEncoding::Scrambler(poly, seed) => {
+                    data = Bytes::from(scr_xor(&data, *poly, *seed));
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, _) => {
                     data = Bytes::from(rq_decode(vec![data], *rq_len, *mtu)?);
@@ -591,6 +608,11 @@ impl Deframer {
                 }
                 ContentEncoding::RaptorQDynamic(mtu, _) => {
                     let rq_len = data.len();
+                    data = Bytes::from(rq_decode(vec![data], rq_len, *mtu)?);
+                    quality += 10;
+                }
+                ContentEncoding::RaptorQDynamicPercent(mtu, percent) => {
+                    let rq_len = data.len() * (*percent as usize) / 100;
                     data = Bytes::from(rq_decode(vec![data], rq_len, *mtu)?);
                     quality += 10;
                 }
