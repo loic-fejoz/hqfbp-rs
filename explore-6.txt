@@ -1,0 +1,4 @@
+chunk(180),h,crc32,scr(0x21001),rs(240,224)
+rq(dlen,180,20%),crc32,h,rs(240,224)
+chunk(68),h,crc32,scr(0x21001),rs(120,112),conv(7,1/2)
+rq(dlen,68,20%),crc32,h,rs(120,112),conv(7,1/2)

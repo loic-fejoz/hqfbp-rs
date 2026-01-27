@@ -1,0 +1,6 @@
+chunk(180),h,crc16, repeat(2)
+chunk(180),h,crc16, repeat(3)
+chunk(180),h,crc32, repeat(2)
+chunk(180),h,scr(0x21001),rs(240,224)
+chunk(80),h,scr(0x21001), golay
+rq(dlen,178,20%),crc16,h,rs(240,222)

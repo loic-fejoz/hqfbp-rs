@@ -142,14 +142,16 @@ impl SimulationMetrics {
     }
 
     fn add_residual_errors(&mut self, original_payload: &[u8], decoded_payload: &[u8]) {
-        let length = original_payload.len().min(decoded_payload.len());
-        self.total_bits_evaluated += length * 8;
-        for i in 0..length {
+        let eval_len = original_payload.len();
+        self.total_bits_evaluated += eval_len * 8;
+
+        let common_len = eval_len.min(decoded_payload.len());
+        for i in 0..common_len {
             let diff = original_payload[i] ^ decoded_payload[i];
             self.total_residual_bit_errors += diff.count_ones() as usize;
         }
         self.total_residual_bit_errors +=
-            (original_payload.len() as isize - decoded_payload.len() as isize).unsigned_abs() * 8;
+            (eval_len as isize - decoded_payload.len() as isize).unsigned_abs() * 8;
     }
 
     fn report(&self, format: Format) -> String {
@@ -338,32 +340,9 @@ fn main() -> Result<()> {
             .generate(&source_data, None)
             .map_err(|e| anyhow!("Generator failed: {e}"))?;
         log::debug!("Generated {} PDUs for file", pdus.len());
-        let mut clean_pdus_info = Vec::new();
-        let mut clean_deframer = Deframer::new();
-        if let Some(ae) = &ann_encs {
-            clean_deframer.register_announcement(Some("SIMUL".to_string()), 1, ae.clone());
-        } else {
-            clean_deframer.register_announcement(Some("SIMUL".to_string()), 1, encs.clone());
-        }
 
-        for pdu in &pdus {
-            clean_deframer.receive_bytes(pdu);
-            while let Some(ev) = clean_deframer.next_event() {
-                if let Event::PDU(pe) = ev {
-                    clean_pdus_info.push((pdu.clone(), pe.payload));
-                }
-            }
-        }
-
-        // Calculate header bits from clean PDUs
-        for (pdu, payload) in &clean_pdus_info {
-            let h_size = pdu.len() - payload.len();
-            metrics.header_bits += h_size * 8;
-        }
-
-        if clean_pdus_info.is_empty() {
-            continue;
-        }
+        let (_, _, total_h_size) = generator.last_header_stats();
+        metrics.header_bits += total_h_size * 8;
 
         let mut noisy_deframer = Deframer::new();
         if let Some(ae) = &ann_encs {
@@ -373,7 +352,7 @@ fn main() -> Result<()> {
         }
         let mut recovered = false;
 
-        for (clean_pdu, expected_payload) in clean_pdus_info.iter() {
+        for clean_pdu in &pdus {
             let (noisy_pdu, errors_in_pdu) = channel.process(clean_pdu);
 
             noisy_deframer.receive_bytes(&noisy_pdu);
@@ -381,13 +360,21 @@ fn main() -> Result<()> {
             let mut pdu_accepted = false;
             while let Some(ev) = noisy_deframer.next_event() {
                 match ev {
-                    Event::PDU(pe) => {
+                    Event::PDU(_) => {
                         pdu_accepted = true;
-                        metrics.add_residual_errors(expected_payload, &pe.payload);
                     }
                     Event::Message(me) => {
-                        if me.payload.starts_with(&source_data) {
-                            recovered = true;
+                        // If it's the data message, compute residual errors against source_data
+                        // (Heuristic: it's not the announcement)
+                        if me.header.media_type()
+                            != Some(hqfbp_rs::MediaType::Type(
+                                "application/vnd.hqfbp+cbor".to_string(),
+                            ))
+                        {
+                            metrics.add_residual_errors(&source_data, &me.payload);
+                            if me.payload == source_data {
+                                recovered = true;
+                            }
                         }
                     }
                 }

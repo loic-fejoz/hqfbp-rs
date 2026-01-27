@@ -10,6 +10,9 @@ pub struct PDUGenerator {
     encodings: Vec<ContentEncoding>,
     announcement_encoder: Option<Box<PDUGenerator>>,
     next_msg_id: u32,
+    last_min_header_size: usize,
+    last_max_header_size: usize,
+    last_total_header_size: usize,
 }
 
 impl PDUGenerator {
@@ -39,7 +42,18 @@ impl PDUGenerator {
             encodings: encodings.unwrap_or_default(),
             announcement_encoder: ann_encoder,
             next_msg_id: initial_msg_id,
+            last_min_header_size: 0,
+            last_max_header_size: 0,
+            last_total_header_size: 0,
         }
+    }
+
+    pub fn last_header_stats(&self) -> (usize, usize, usize) {
+        (
+            self.last_min_header_size,
+            self.last_max_header_size,
+            self.last_total_header_size,
+        )
     }
 
     fn get_next_msg_id(&mut self) -> u32 {
@@ -157,6 +171,10 @@ impl PDUGenerator {
         };
         let data_orig_id = self.next_msg_id;
 
+        self.last_min_header_size = usize::MAX;
+        self.last_max_header_size = 0;
+        self.last_total_header_size = 0;
+
         let mut header_template = Header {
             file_size: Some(file_size),
             src_callsign: self.src_callsign.clone(),
@@ -197,7 +215,13 @@ impl PDUGenerator {
                     header.content_encoding = Some(crate::EncodingList(full_encs.clone()));
                     header.payload_size = Some(chunk_data.len() as u64);
 
-                    new_chunks.push(pack(&header, chunk_data)?);
+                    let packed = pack(&header, chunk_data)?;
+                    let h_size = packed.len() - chunk_data.len();
+                    self.last_min_header_size = self.last_min_header_size.min(h_size);
+                    self.last_max_header_size = self.last_max_header_size.max(h_size);
+                    self.last_total_header_size += h_size;
+
+                    new_chunks.push(packed);
                 }
                 current_chunks = new_chunks;
             } else if let ContentEncoding::Chunk(size) = enc {
@@ -261,8 +285,19 @@ impl PDUGenerator {
                 &body_bytes,
                 Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string())),
             )?;
+            let (a_min, a_max, a_total) = ann_enc.last_header_stats();
+            self.last_min_header_size = self.last_min_header_size.min(a_min);
+            self.last_max_header_size = self.last_max_header_size.max(a_max);
+            self.last_total_header_size += a_total;
+
             final_pdus.extend(ann_pdus);
         }
+
+        self.last_min_header_size = if self.last_min_header_size == usize::MAX {
+            0
+        } else {
+            self.last_min_header_size
+        };
 
         final_pdus.extend(current_chunks);
         Ok(final_pdus)

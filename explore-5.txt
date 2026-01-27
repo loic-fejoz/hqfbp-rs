@@ -1,0 +1,4 @@
+chunk(180),h,crc32,scr(0x21001),rs(240,224)
+chunk(80),h,scr(0x21001), golay
+rq(dlen,180,20%),crc32,h,rs(240,224)
+rq(dlen,78,20%),crc16,h,golay

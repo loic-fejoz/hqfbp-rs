@@ -1,0 +1,7 @@
+chunk(196),h,crc32
+chunk(198),h,crc16
+chunk(198),h,crc16, repeat(2)
+chunk(180),h,scr(0x21001),rs(240,224)
+rq(dlen,196,10%),h,crc32, repeat(2)
+rq(dlen,196,20%),h,crc32
+rq(dlen,178,20%),crc16,h,rs(240,222)
