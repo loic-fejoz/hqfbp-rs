@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::Parser;
 use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::error::{HqfbpContext, Result};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;

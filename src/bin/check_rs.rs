@@ -1,6 +1,6 @@
-use anyhow::Result;
 use clap::Parser;
 use hqfbp_rs::codec::rs_encode;
+use hqfbp_rs::error::Result;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Check Reed-Solomon encoding")]

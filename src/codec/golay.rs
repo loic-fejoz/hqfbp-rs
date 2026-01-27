@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+type Result<T, E = String> = std::result::Result<T, E>;
 
 /// Golay(24,12) Systematic generator matrix part B (12x12)
 /// Standard B matrix for the (24,12) code.
@@ -137,9 +137,13 @@ pub fn golay_encode(data: &[u8]) -> Vec<u8> {
     encoded
 }
 
-pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize)> {
+use crate::error::CodecError;
+
+pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize), CodecError> {
     if data.len() % 6 != 0 {
-        bail!("Invalid Golay data length: must be multiple of 6 bytes (2 codewords)");
+        return Err(CodecError::InsufficientData(Some(
+            "Invalid Golay data length: must be multiple of 6 bytes (2 codewords)".to_string(),
+        )));
     }
 
     let mut decoded = Vec::with_capacity(data.len() / 6 * 3);

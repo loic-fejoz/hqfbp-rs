@@ -97,5 +97,6 @@ fn test_rq_decode_insufficient_symbols() {
 
     let res = rq_decode(packets, data.len(), mtu);
     assert!(res.is_err());
-    assert!(format!("{res:?}").contains("insufficient symbols"));
+    let err = res.unwrap_err();
+    assert!(matches!(err, hqfbp_rs::CodecError::InsufficientData(_)));
 }

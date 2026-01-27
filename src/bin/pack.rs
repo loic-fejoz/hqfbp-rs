@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
 use clap::Parser;
+use hqfbp_rs::error::{HqfbpContext, Result};
 use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::{ContentEncoding, MediaType};
 use std::fs::File;

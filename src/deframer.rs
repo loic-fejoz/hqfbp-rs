@@ -1,6 +1,6 @@
 use crate::codec::*;
-use crate::{ContentEncoding, EncodingList, Header, MediaType, unpack};
-use anyhow::{Result, bail};
+use crate::error::{HqfbpError, Result};
+use crate::{CodecError, ContentEncoding, EncodingList, Header, MediaType, unpack};
 use bytes::Bytes;
 use std::collections::{HashMap, VecDeque};
 
@@ -339,16 +339,9 @@ impl Deframer {
                     }
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, _) => {
-                    match rq_decode(current.clone(), *rq_len, *mtu) {
-                        Ok(res) => {
-                            current = vec![Bytes::from(res)];
-                            quality += 10;
-                        }
-                        Err(e) => {
-                            // Silence RQ errors here as it's expected in Phase 2
-                            return Err(e);
-                        }
-                    }
+                    let res = rq_decode(current.clone(), *rq_len, *mtu)?;
+                    current = vec![Bytes::from(res)];
+                    quality += 10;
                 }
                 ContentEncoding::RaptorQDynamic(mtu, _) => {
                     // For Dynamic RQ in Phase 2, we estimate rq_len from total received data
@@ -400,7 +393,9 @@ impl Deframer {
             final_data.extend_from_slice(&b);
         }
         if final_data.is_empty() {
-            bail!("Empty data after multi-decoding");
+            return Err(HqfbpError::Other(
+                "Empty data after multi-decoding".to_string(),
+            ));
         }
         Ok((Bytes::from(final_data), quality))
     }
@@ -592,7 +587,7 @@ impl Deframer {
                         data = data.slice(..vl);
                         quality += 1000;
                     } else {
-                        bail!("crc32 fail");
+                        return Err(CodecError::CrcMismatch.into());
                     }
                 }
                 ContentEncoding::Crc16 => {
@@ -629,7 +624,7 @@ impl Deframer {
                         data = data.slice(..vl);
                         quality += 1000;
                     } else {
-                        bail!("crc16 fail");
+                        return Err(CodecError::CrcMismatch.into());
                     }
                 }
                 ContentEncoding::ReedSolomon(n, k) => match rs_decode(&data, *n, *k) {
@@ -639,7 +634,7 @@ impl Deframer {
                         let max_correctable = ((n - k) / 2) * num_blocks;
                         quality += max_correctable.saturating_sub(corrected);
                     }
-                    Err(e) => bail!(e),
+                    Err(e) => return Err(e.into()),
                 },
                 ContentEncoding::Repeat(_count) => {
                     // In HQFBP, Repeat after the boundary (PDU-level) typically means

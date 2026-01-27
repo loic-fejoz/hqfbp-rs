@@ -1,6 +1,6 @@
 use crate::codec::*;
+use crate::error::{HqfbpError, Result};
 use crate::{ContentEncoding, Header, MediaType, pack};
-use anyhow::Result;
 use bytes::Bytes;
 
 pub struct PDUGenerator {
@@ -69,13 +69,13 @@ impl PDUGenerator {
                 ContentEncoding::H => {}
                 ContentEncoding::Identity => {}
                 ContentEncoding::Gzip => {
-                    current_data = gzip_compress(&current_data)?;
+                    current_data = gzip_compress(&current_data).map_err(HqfbpError::Codec)?;
                 }
                 ContentEncoding::Brotli => {
-                    current_data = brotli_compress(&current_data)?;
+                    current_data = brotli_compress(&current_data).map_err(HqfbpError::Codec)?;
                 }
                 ContentEncoding::Lzma => {
-                    current_data = lzma_compress(&current_data)?;
+                    current_data = lzma_compress(&current_data).map_err(HqfbpError::Codec)?;
                 }
                 ContentEncoding::Crc16 => {
                     let crc = crc16_ccitt(&current_data);
@@ -86,15 +86,17 @@ impl PDUGenerator {
                     current_data.extend_from_slice(&crc);
                 }
                 ContentEncoding::ReedSolomon(n, k) => {
-                    current_data = rs_encode(&current_data, *n, *k)?;
+                    current_data = rs_encode(&current_data, *n, *k).map_err(HqfbpError::Codec)?;
                 }
                 ContentEncoding::RaptorQ(rq_len, mtu, repairs) => {
-                    let res = rq_encode(&current_data, *rq_len, *mtu, *repairs)?;
+                    let res = rq_encode(&current_data, *rq_len, *mtu, *repairs)
+                        .map_err(HqfbpError::Codec)?;
                     return Ok(res.into_iter().collect());
                 }
                 ContentEncoding::RaptorQDynamic(mtu, repairs) => {
                     let rq_len = current_data.len();
-                    let res = rq_encode(&current_data, rq_len, *mtu, *repairs)?;
+                    let res = rq_encode(&current_data, rq_len, *mtu, *repairs)
+                        .map_err(HqfbpError::Codec)?;
                     return Ok(res.into_iter().collect());
                 }
                 ContentEncoding::RaptorQDynamicPercent(mtu, percent) => {
@@ -102,26 +104,30 @@ impl PDUGenerator {
                     let repairs = 1.max(
                         (rq_len as f32 * (*percent as f32) / (100.0 * (*mtu as f32))).ceil() as u32,
                     );
-                    let res = rq_encode(&current_data, rq_len, *mtu, repairs)?;
+                    let res = rq_encode(&current_data, rq_len, *mtu, repairs)
+                        .map_err(HqfbpError::Codec)?;
                     return Ok(res.into_iter().collect());
                 }
                 ContentEncoding::LT(len, mtu, repairs) => {
-                    let res = lt_encode(&current_data, *len, *mtu, *repairs)?;
+                    let res = lt_encode(&current_data, *len, *mtu, *repairs)
+                        .map_err(HqfbpError::Codec)?;
                     return Ok(res.into_iter().collect());
                 }
                 ContentEncoding::LTDynamic(mtu, repairs) => {
                     let len = current_data.len();
-                    let res = lt_encode(&current_data, len, *mtu, *repairs)?;
+                    let res =
+                        lt_encode(&current_data, len, *mtu, *repairs).map_err(HqfbpError::Codec)?;
                     return Ok(res.into_iter().collect());
                 }
                 ContentEncoding::Conv(k, rate) => {
-                    current_data = conv_encode(&current_data, *k, rate)?;
+                    current_data =
+                        conv_encode(&current_data, *k, rate).map_err(HqfbpError::Codec)?;
                 }
                 ContentEncoding::Scrambler(poly, seed) => {
                     current_data = scr_xor(&current_data, *poly, *seed);
                 }
                 ContentEncoding::Golay(_, _) => {
-                    current_data = golay_encode(&current_data)?;
+                    current_data = golay_encode(&current_data).map_err(HqfbpError::Codec)?;
                 }
                 _ => {}
             }

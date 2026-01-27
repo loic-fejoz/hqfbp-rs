@@ -1,4 +1,7 @@
-use anyhow::{Result, anyhow, bail};
+pub mod error;
+
+pub use crate::error::{CodecError, HqfbpError, ProtocolError, Result};
+
 use bytes::Bytes;
 use minicbor::{Decode, Decoder, Encode, Encoder};
 use regex::Regex;
@@ -221,7 +224,10 @@ impl Header {
                 if let Some(val) = &other.$field {
                     if let Some(existing) = &self.$field {
                         if $consistent && existing != val {
-                            bail!(concat!("Inconsistent header field: ", stringify!($field)));
+                            return Err(ProtocolError::InconsistentField(
+                                stringify!($field).to_string(),
+                            )
+                            .into());
                         }
                     } else {
                         self.$field = Some(val.clone());
@@ -440,7 +446,7 @@ impl std::fmt::Display for ContentEncoding {
 }
 
 impl TryFrom<&str> for ContentEncoding {
-    type Error = anyhow::Error;
+    type Error = HqfbpError;
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         if s == "h" || s == "-1" {
             Ok(ContentEncoding::H)
@@ -494,9 +500,10 @@ impl TryFrom<&str> for ContentEncoding {
         } else if let Some(m) = get_scr_re().captures(s) {
             let parse_val = |val: &str| -> Result<u64> {
                 if let Some(stripped) = val.strip_prefix("0x") {
-                    Ok(u64::from_str_radix(stripped, 16)?)
+                    u64::from_str_radix(stripped, 16).map_err(|e| HqfbpError::Parse(e.to_string()))
                 } else {
-                    Ok(val.parse()?)
+                    val.parse()
+                        .map_err(|e: std::num::ParseIntError| HqfbpError::Parse(e.to_string()))
                 }
             };
             let p = parse_val(&m[1])?;
@@ -517,7 +524,7 @@ impl TryFrom<&str> for ContentEncoding {
 }
 
 impl TryFrom<i8> for ContentEncoding {
-    type Error = anyhow::Error;
+    type Error = HqfbpError;
     fn try_from(i: i8) -> Result<Self, Self::Error> {
         match i {
             -1 => Ok(ContentEncoding::H),
@@ -677,7 +684,7 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
 
     // 3. Ensure Message-Id is present
     if h.message_id.is_none() {
-        bail!("Message-Id is mandatory in HQFBP header");
+        return Err(ProtocolError::MissingField("Message-Id".to_string()).into());
     }
 
     // 4. Update Payload-Size
@@ -687,7 +694,7 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
     let mut encoder = Encoder::new(&mut buf);
     encoder
         .encode(&h)
-        .map_err(|e| anyhow!("Header encode failed: {e}"))?;
+        .map_err(|e| ProtocolError::MalformedHeader(format!("Header encode failed: {e}")))?;
     let header_len = buf.len();
     buf.extend_from_slice(payload);
     log::debug!(
@@ -704,13 +711,15 @@ pub fn unpack(data: Bytes) -> Result<(Header, Bytes)> {
     let header: Header = match decoder.decode() {
         Ok(h) => h,
         Err(e) => {
-            bail!("Header decode failed: {e}");
+            return Err(
+                ProtocolError::MalformedHeader(format!("Header decode failed: {e}")).into(),
+            );
         }
     };
     if header.message_id.is_none()
         && header.content_type.as_deref() != Some("application/vnd.hqfbp+cbor")
     {
-        bail!("Decoded header is missing identifying fields (message_id or content_type)");
+        return Err(ProtocolError::MissingField("message_id or content_type".to_string()).into());
     }
     let pos = decoder.position();
     let payload = data.slice(pos..);

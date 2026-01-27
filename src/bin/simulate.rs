@@ -1,3 +1,6 @@
+use clap::{Parser, ValueEnum};
+use hqfbp_rs::ContentEncoding;
+use hqfbp_rs::deframer::{Deframer, Event};
 /// HQFBP Simulation Engine
 ///
 /// This tool simulates the transmission of files over a noisy channel using HQFBP.
@@ -9,10 +12,7 @@
 ///
 /// If announcements are used, the Deframer is pre-configured ONLY with the announcement
 /// encoding. It must learn the data encodings by successfully decoding the announcement.
-use anyhow::{Result, anyhow};
-use clap::{Parser, ValueEnum};
-use hqfbp_rs::ContentEncoding;
-use hqfbp_rs::deframer::{Deframer, Event};
+use hqfbp_rs::error::{HqfbpError, Result};
 use hqfbp_rs::generator::PDUGenerator;
 use rand::{Rng, RngCore};
 
@@ -338,7 +338,7 @@ fn main() -> Result<()> {
 
         let pdus = generator
             .generate(&source_data, None)
-            .map_err(|e| anyhow!("Generator failed: {e}"))?;
+            .map_err(|e| HqfbpError::Other(format!("Generator failed: {e}")))?;
         log::debug!("Generated {} PDUs for file", pdus.len());
 
         let (_, _, total_h_size) = generator.last_header_stats();

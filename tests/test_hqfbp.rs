@@ -27,11 +27,11 @@ fn test_mandatory_msg_id() {
     };
     let res = pack(&header, b"data");
     assert!(res.is_err());
-    assert!(
-        res.unwrap_err()
-            .to_string()
-            .contains("Message-Id is mandatory")
-    );
+    let err = res.unwrap_err();
+    assert!(matches!(
+        err,
+        hqfbp_rs::HqfbpError::Protocol(hqfbp_rs::ProtocolError::MissingField(field)) if field == "Message-Id"
+    ));
 }
 
 #[test]

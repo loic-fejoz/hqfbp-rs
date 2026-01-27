@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow, bail};
+use crate::error::{CodecError, Result};
 use bytes::Bytes;
 use crc::{CRC_32_ISO_HDLC, Crc};
 use flate2::Compression;
@@ -44,46 +44,58 @@ pub fn crc32_std(data: &[u8]) -> [u8; 4] {
     crc.checksum(data).to_be_bytes()
 }
 
-pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>> {
+pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(data)?;
-    Ok(encoder.finish()?)
+    encoder
+        .write_all(data)
+        .map_err(|e| CodecError::CompressionError(format!("Gzip write failed: {e}")))?;
+    Ok(encoder
+        .finish()
+        .map_err(|e| CodecError::CompressionError(format!("Gzip finish failed: {e}")))?)
 }
 
-pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>> {
+pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     let mut decoder = GzDecoder::new(data);
     let mut res = Vec::new();
-    decoder.read_to_end(&mut res)?;
+    decoder
+        .read_to_end(&mut res)
+        .map_err(|e| CodecError::CompressionError(format!("Gzip decompress failed: {e}")))?;
     Ok(res)
 }
 
-pub fn brotli_compress(data: &[u8]) -> Result<Vec<u8>> {
+pub fn brotli_compress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     let mut res = Vec::new();
     let mut writer = brotli::CompressorWriter::new(&mut res, 4096, 6, 22);
-    writer.write_all(data)?;
-    writer.flush()?;
+    writer
+        .write_all(data)
+        .map_err(|e| CodecError::CompressionError(format!("Brotli write failed: {e}")))?;
+    writer
+        .flush()
+        .map_err(|e| CodecError::CompressionError(format!("Brotli flush failed: {e}")))?;
     drop(writer);
     Ok(res)
 }
 
-pub fn brotli_decompress(data: &[u8]) -> Result<Vec<u8>> {
+pub fn brotli_decompress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     let mut res = Vec::new();
     let mut reader = brotli::Decompressor::new(data, 4096);
-    reader.read_to_end(&mut res)?;
+    reader
+        .read_to_end(&mut res)
+        .map_err(|e| CodecError::CompressionError(format!("Brotli decompress failed: {e}")))?;
     Ok(res)
 }
 
-pub fn lzma_compress(data: &[u8]) -> Result<Vec<u8>> {
+pub fn lzma_compress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     let mut res = Vec::new();
     lzma_rs::xz_compress(&mut Cursor::new(data), &mut res)
-        .map_err(|e| anyhow!("XZ compress failed: {e}"))?;
+        .map_err(|e| CodecError::CompressionError(format!("XZ compress failed: {e}")))?;
     Ok(res)
 }
 
 pub fn lzma_decompress(data: &[u8]) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     lzma_rs::xz_decompress(&mut Cursor::new(data), &mut res)
-        .map_err(|e| anyhow!("XZ decompress failed: {e}"))?;
+        .map_err(|e| CodecError::CompressionError(format!("XZ decompress failed: {e}")))?;
     Ok(res)
 }
 
@@ -127,9 +139,11 @@ pub fn scr_xor(data: &[u8], poly_mask: u64, seed: Option<u64>) -> Vec<u8> {
     res
 }
 
-pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
+pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>, CodecError> {
     if n > 255 || k == 0 || k > n {
-        bail!("Invalid RS parameters: n={n}, k={k}");
+        return Err(CodecError::InvalidParameters(format!(
+            "Invalid RS parameters: n={n}, k={k}"
+        )));
     }
     let ecc_len = n - k;
     let encoder = RSEncoder::new(ecc_len);
@@ -159,9 +173,11 @@ pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
     Ok(encoded)
 }
 
-pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
+pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize), CodecError> {
     if n > 255 || k == 0 || k >= n {
-        bail!("Invalid RS parameters: n={n}, k={k}");
+        return Err(CodecError::InvalidParameters(format!(
+            "Invalid RS parameters: n={n}, k={k}"
+        )));
     }
     let ecc_len = n - k;
     let decoder = RSDecoder::new(ecc_len);
@@ -183,7 +199,7 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
         }
 
         if block_len <= ecc_len {
-            bail!("RS block too short to contain parity");
+            return Err(CodecError::InsufficientData(None));
         }
 
         let lib_pad = 255 - n;
@@ -215,7 +231,7 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
                 total_corrected += err_count;
             }
             Err(e) => {
-                bail!("RS decode failed: {e:?}");
+                return Err(CodecError::FecFailure(format!("RS decode failed: {e:?}")));
             }
         }
     }
@@ -227,7 +243,7 @@ pub fn rq_encode(
     original_count: usize,
     mtu: u16,
     repair_count: u32,
-) -> Result<Vec<Bytes>> {
+) -> Result<Vec<Bytes>, CodecError> {
     let mut padded_data = data.to_vec();
     padded_data.resize(original_count, 0);
 
@@ -241,7 +257,11 @@ pub fn rq_encode(
         .collect())
 }
 
-pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
+pub fn rq_decode(
+    packets: Vec<Bytes>,
+    original_count: usize,
+    mtu: u16,
+) -> Result<Vec<u8>, CodecError> {
     // Standard HQFBP alignment is 1-4. Python uses 1 by default often.
     // Let's try 1 for alignment.
     let oti = raptorq::ObjectTransmissionInformation::new(original_count as u64, mtu, 1, 1, 1);
@@ -271,7 +291,7 @@ pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result
             return Ok(res);
         }
     }
-    bail!("RaptorQ decoding failed: insufficient symbols")
+    Err(CodecError::InsufficientData(None))
 }
 
 pub fn lt_encode(
@@ -279,7 +299,7 @@ pub fn lt_encode(
     original_count: usize,
     mtu: u16,
     repair_count: u32,
-) -> Result<Vec<Bytes>> {
+) -> Result<Vec<Bytes>, CodecError> {
     if mtu == 0 || original_count == 0 {
         return Ok(Vec::new());
     }
@@ -294,7 +314,11 @@ pub fn lt_encode(
     Ok(packets.into_iter().map(Bytes::from).collect())
 }
 
-pub fn lt_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
+pub fn lt_decode(
+    packets: Vec<Bytes>,
+    original_count: usize,
+    mtu: u16,
+) -> Result<Vec<u8>, CodecError> {
     if mtu == 0 || original_count == 0 {
         return Ok(Vec::new());
     }
@@ -310,13 +334,15 @@ pub fn lt_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result
     if let Some(res) = decoder.get_result() {
         Ok(res)
     } else {
-        bail!("LT decoding failed: insufficient symbols")
+        Err(CodecError::InsufficientData(None))
     }
 }
 
-pub fn conv_encode(data: &[u8], k: usize, rate: &str) -> Result<Vec<u8>> {
+pub fn conv_encode(data: &[u8], k: usize, rate: &str) -> Result<Vec<u8>, CodecError> {
     if k != 7 || rate != "1/2" {
-        bail!("Only conv(7, 1/2) is currently supported");
+        return Err(CodecError::InvalidParameters(
+            "Only conv(7, 1/2) is currently supported".to_string(),
+        ));
     }
 
     let g1 = 0o133u8;
@@ -403,9 +429,11 @@ static CONV_TRANSITIONS: Lazy<[[ConvTransition; 2]; 64]> = Lazy::new(|| {
     transitions
 });
 
-pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)> {
+pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize), CodecError> {
     if k != 7 || rate != "1/2" {
-        bail!("Only conv(7, 1/2) is currently supported");
+        return Err(CodecError::InvalidParameters(
+            "Only conv(7, 1/2) is currently supported".to_string(),
+        ));
     }
 
     let num_steps = data.len() * 4;
@@ -501,12 +529,12 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     Ok((res, min_m as usize))
 }
 
-pub fn golay_encode(data: &[u8]) -> Result<Vec<u8>> {
+pub fn golay_encode(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     Ok(golay_enc(data))
 }
 
-pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize)> {
-    golay_dec(data)
+pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize), CodecError> {
+    golay_dec(data).map_err(|e| CodecError::FecFailure(e.to_string()))
 }
 
 #[cfg(test)]
