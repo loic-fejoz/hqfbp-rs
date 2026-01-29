@@ -121,21 +121,6 @@ mod tests {
 
         assert_eq!(e1, e2);
         assert_ne!(e1, e3);
-
-        println!(
-            "Seed 42: {}",
-            e1.0.iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        println!(
-            "Seed 43: {}",
-            e3.0.iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
     }
 
     #[test]

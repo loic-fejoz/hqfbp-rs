@@ -257,6 +257,15 @@ impl PDUGenerator {
                         actual_enc = ContentEncoding::RaptorQ(c.len(), mtu, repairs);
                         // Update full_encs for the header
                         full_encs[i] = actual_enc.clone();
+                    } else if let ContentEncoding::RaptorQDynamicPercent(mtu, percent) = actual_enc
+                    {
+                        let rq_len = c.len();
+                        let repairs = 1.max(
+                            (rq_len as f32 * (percent as f32) / (100.0 * (mtu as f32))).ceil()
+                                as u32,
+                        );
+                        actual_enc = ContentEncoding::RaptorQ(rq_len, mtu, repairs);
+                        full_encs[i] = actual_enc.clone();
                     } else if let ContentEncoding::LTDynamic(mtu, repairs) = actual_enc {
                         actual_enc = ContentEncoding::LT(c.len(), mtu, repairs);
                         full_encs[i] = actual_enc.clone();

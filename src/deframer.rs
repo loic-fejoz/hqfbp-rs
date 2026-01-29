@@ -159,9 +159,7 @@ impl Deframer {
                             let is_ann = h2.media_type()
                                 == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string()))
                                 || h2.media_type() == Some(MediaType::Format(60));
-                            if is_ann {
-                                // eprintln!("DEBUG: Phase 1 decoded Announcement!");
-                            }
+                            if is_ann {}
 
                             if let Ok((p3, q_gain)) =
                                 self.apply_pdu_level_decodings(&h2, p2.clone())
@@ -177,9 +175,7 @@ impl Deframer {
                         let is_ann = h_peek.media_type()
                             == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string()))
                             || h_peek.media_type() == Some(MediaType::Format(60));
-                        if is_ann {
-                            // eprintln!("DEBUG: Phase 1 Announcement failed: {e}");
-                        }
+                        if is_ann {}
                     }
                 }
             } else {
@@ -258,46 +254,37 @@ impl Deframer {
                 let mut try_list = self.not_yet_decoded.clone();
                 try_list.push(b_data.clone());
                 match self.apply_decodings_multi(try_list, &post, None, false) {
-                    Ok((clean_pdu, q)) => {
-                        match unpack(clean_pdu) {
-                            Ok((mut h2, p2)) => {
-                                self.strip_post_h_encodings(&mut h2);
-                                if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
-                                    let src_c = h2.src_callsign.clone();
-                                    let orig_id =
-                                        h2.original_message_id.or(h2.message_id).unwrap_or(0);
-                                    let session_key = (src_c, orig_id);
-                                    let chunk_id = h2.chunk_id.unwrap_or(0);
-                                    let new_quality = q + q_gain;
+                    Ok((clean_pdu, q)) => match unpack(clean_pdu) {
+                        Ok((mut h2, p2)) => {
+                            self.strip_post_h_encodings(&mut h2);
+                            if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
+                                let src_c = h2.src_callsign.clone();
+                                let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
+                                let session_key = (src_c, orig_id);
+                                let chunk_id = h2.chunk_id.unwrap_or(0);
+                                let new_quality = q + q_gain;
 
-                                    let already_had_better =
-                                        if let Some(s) = self.sessions.get(&session_key) {
-                                            if let Some(existing) = s.chunks.get(&chunk_id) {
-                                                existing.1 >= new_quality
-                                            } else {
-                                                false
-                                            }
+                                let already_had_better =
+                                    if let Some(s) = self.sessions.get(&session_key) {
+                                        if let Some(existing) = s.chunks.get(&chunk_id) {
+                                            existing.1 >= new_quality
                                         } else {
                                             false
-                                        };
+                                        }
+                                    } else {
+                                        false
+                                    };
 
-                                    self.process_pdu(h2, p3, new_quality);
-                                    reclaimed_any = true;
-                                    if !already_had_better {
-                                        self.not_yet_decoded = Vec::new();
-                                    }
+                                self.process_pdu(h2, p3, new_quality);
+                                reclaimed_any = true;
+                                if !already_had_better {
+                                    self.not_yet_decoded = Vec::new();
                                 }
                             }
-                            Err(_e) => {
-                                // eprintln!("DEBUG: unpack failed: {e}");
-                            }
                         }
-                    }
-                    Err(_e) => {
-                        if !post.is_empty() {
-                            // eprintln!("DEBUG: Phase 2 apply_decodings_multi fail: {:?}", e);
-                        }
-                    }
+                        Err(_e) => {}
+                    },
+                    Err(_e) => if !post.is_empty() {},
                 }
                 if reclaimed_any {
                     break;
@@ -439,8 +426,6 @@ impl Deframer {
         let session_key = (src_callsign.clone(), orig_id);
         let total_chunks = header.total_chunks.unwrap_or(1);
         let chunk_id = header.chunk_id.unwrap_or(0);
-
-        // eprintln!("DEBUG: apply_pdu mid={:?}, ce={:?}, total={}, chunk={}, p_len={}", header.message_id, header.content_encoding, total_chunks, chunk_id, payload.len());
 
         let session = self
             .sessions
@@ -778,7 +763,6 @@ impl Deframer {
         {
             Ok((d, _)) => d,
             Err(_e) => {
-                // eprintln!("DEBUG: complete_message apply_decodings_multi failed: {e}");
                 return;
             }
         };

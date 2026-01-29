@@ -251,10 +251,11 @@ pub fn rq_encode(
     let encoder = RQEncoder::new(&padded_data, oti);
     let packets = encoder.get_encoded_packets(repair_count);
 
-    Ok(packets
+    let res: Vec<Bytes> = packets
         .into_iter()
         .map(|p| Bytes::from(p.serialize()))
-        .collect())
+        .collect();
+    Ok(res)
 }
 
 pub fn rq_decode(

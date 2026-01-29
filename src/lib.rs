@@ -347,6 +347,10 @@ fn get_rq_dyn_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"rq\(dlen,\s*(\d+),\s*(\d+)\)").unwrap())
 }
+fn get_rq_dyn_perc_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"rq\(dlen,\s*(\d+),\s*(\d+)%\)").unwrap())
+}
 fn get_lt_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"lt\((\d+),\s*(\d+),\s*(\d+)\)").unwrap())
@@ -474,6 +478,11 @@ impl TryFrom<&str> for ContentEncoding {
             ))
         } else if let Some(m) = get_rq_dyn_re().captures(s) {
             Ok(ContentEncoding::RaptorQDynamic(
+                m[1].parse()?,
+                m[2].parse()?,
+            ))
+        } else if let Some(m) = get_rq_dyn_perc_re().captures(s) {
+            Ok(ContentEncoding::RaptorQDynamicPercent(
                 m[1].parse()?,
                 m[2].parse()?,
             ))
