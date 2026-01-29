@@ -13,6 +13,7 @@ pub struct PDUGenerator {
     last_min_header_size: usize,
     last_max_header_size: usize,
     last_total_header_size: usize,
+    encoding_factory: crate::codec::EncodingFactory,
 }
 
 impl PDUGenerator {
@@ -45,6 +46,7 @@ impl PDUGenerator {
             last_min_header_size: 0,
             last_max_header_size: 0,
             last_total_header_size: 0,
+            encoding_factory: crate::codec::EncodingFactory::new(),
         }
     }
 
@@ -94,7 +96,7 @@ impl PDUGenerator {
 
     pub fn generate(&mut self, data: &[u8], media_type: Option<MediaType>) -> Result<Vec<Bytes>> {
         let file_size = data.len() as u64;
-        let mut full_encs = self.resolve_encodings();
+        let full_encs = self.resolve_encodings();
 
         let mut current_chunks = vec![Bytes::copy_from_slice(data)];
 
@@ -121,9 +123,10 @@ impl PDUGenerator {
             ..Default::default()
         };
 
-        for (i, enc) in full_encs.iter().enumerate() {
+        for (i, enc_enum) in full_encs.iter().enumerate() {
             ctx.current_index = i;
-            current_chunks = enc.encode(current_chunks, &mut ctx)?;
+            let encoder = self.encoding_factory.get_encoding(enc_enum);
+            current_chunks = encoder.encode(current_chunks, &mut ctx)?;
         }
 
         // Synchronize state back from context

@@ -1,4 +1,4 @@
-use hqfbp_rs::codec::{rs_decode, rs_encode};
+use hqfbp_rs::codec::rs::{rs_decode, rs_encode};
 use rand::{Rng, thread_rng};
 
 fn test_rs_power(n: usize, k: usize, ber: f64, iterations: usize) {

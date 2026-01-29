@@ -1,3 +1,7 @@
+use crate::codec::{Encoding, EncodingContext};
+use crate::error::CodecError;
+use bytes::Bytes;
+
 type Result<T, E = String> = std::result::Result<T, E>;
 
 /// Golay(24,12) Systematic generator matrix part B (12x12)
@@ -137,8 +141,6 @@ pub fn golay_encode(data: &[u8]) -> Vec<u8> {
     encoded
 }
 
-use crate::error::CodecError;
-
 pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize), CodecError> {
     if data.len() % 6 != 0 {
         return Err(CodecError::InsufficientData(Some(
@@ -178,6 +180,42 @@ pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize), CodecError> {
     }
 
     Ok((decoded, total_corrected as usize))
+}
+
+pub struct Golay {
+    _n: usize,
+    _k: usize,
+}
+
+impl Golay {
+    pub fn new(n: usize, k: usize) -> Self {
+        Self { _n: n, _k: k }
+    }
+}
+
+impl Encoding for Golay {
+    fn encode(
+        &self,
+        data: Vec<Bytes>,
+        _ctx: &mut EncodingContext,
+    ) -> Result<Vec<Bytes>, CodecError> {
+        let mut res = Vec::new();
+        for chunk in data {
+            res.push(Bytes::from(golay_encode(&chunk)));
+        }
+        Ok(res)
+    }
+
+    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+        let mut res = Vec::new();
+        let mut quality = 0.0;
+        for chunk in chunks {
+            let (d, corrected) = golay_decode(&chunk)?;
+            res.push(Bytes::from(d));
+            quality += corrected as f32;
+        }
+        Ok((res, quality))
+    }
 }
 
 #[cfg(test)]

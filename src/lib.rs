@@ -381,12 +381,16 @@ fn get_repeat_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"repeat\((\d+)\)").unwrap())
 }
+fn get_asm_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^asm\((0x[0-9a-fA-F]+|\d+)\)$").unwrap())
+}
 fn get_post_asm_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"post_asm\((0x[0-9a-fA-F]+|\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^post_asm\((0x[0-9a-fA-F]+|\d+)\)$").unwrap())
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ContentEncoding {
     H,
     Identity,
@@ -405,6 +409,7 @@ pub enum ContentEncoding {
     Conv(usize, String),
     Golay(usize, usize),
     Scrambler(u64, Option<u64>),
+    Asm(Vec<u8>),
     PostAsm(Vec<u8>),
     Chunk(usize),
     Repeat(usize),
@@ -446,6 +451,7 @@ impl std::fmt::Display for ContentEncoding {
                     write!(f, "scr(0x{p:x})")
                 }
             }
+            ContentEncoding::Asm(w) => write!(f, "asm(0x{})", hex::encode(w)),
             ContentEncoding::PostAsm(w) => write!(f, "post_asm(0x{})", hex::encode(w)),
             ContentEncoding::Chunk(s) => write!(f, "chunk({s})"),
             ContentEncoding::Repeat(n) => write!(f, "repeat({n})"),
@@ -532,6 +538,25 @@ impl TryFrom<&str> for ContentEncoding {
             Ok(ContentEncoding::Chunk(m[1].parse()?))
         } else if let Some(m) = get_repeat_re().captures(s) {
             Ok(ContentEncoding::Repeat(m[1].parse()?))
+        } else if let Some(m) = get_asm_re().captures(s) {
+            let val = &m[1];
+            let bytes = if let Some(hex_str) = val.strip_prefix("0x") {
+                hex::decode(hex_str).map_err(|e| HqfbpError::Parse(e.to_string()))?
+            } else {
+                let n: u64 = val
+                    .parse()
+                    .map_err(|e: std::num::ParseIntError| HqfbpError::Parse(e.to_string()))?;
+                if n == 0 {
+                    vec![0]
+                } else {
+                    let mut b = n.to_be_bytes().to_vec();
+                    // Remove leading zeros
+                    let leading = b.iter().position(|&x| x != 0).unwrap_or(b.len() - 1);
+                    b.drain(0..leading);
+                    b
+                }
+            };
+            Ok(ContentEncoding::Asm(bytes))
         } else if let Some(m) = get_post_asm_re().captures(s) {
             let val = &m[1];
             let bytes = if let Some(hex_str) = val.strip_prefix("0x") {
@@ -569,6 +594,7 @@ impl TryFrom<i8> for ContentEncoding {
             4 => Ok(ContentEncoding::Lzma),
             5 => Ok(ContentEncoding::Crc16),
             6 => Ok(ContentEncoding::Crc32),
+            54 => Ok(ContentEncoding::Asm(Vec::new())),
             56 => Ok(ContentEncoding::PostAsm(Vec::new())), // Should not really happen from i8 unless it's just the ID
             _ => Ok(ContentEncoding::OtherInteger(i)),
         }
@@ -586,7 +612,8 @@ impl From<ContentEncoding> for i8 {
             ContentEncoding::Lzma => 4,
             ContentEncoding::Crc16 => 5,
             ContentEncoding::Crc32 => 6,
-            ContentEncoding::PostAsm(_) => 56,
+            ContentEncoding::Asm(ref w) if w.is_empty() => 54,
+            ContentEncoding::PostAsm(ref w) if w.is_empty() => 56,
             ContentEncoding::OtherInteger(i) => i,
             _ => 127, // Fallback for complex ones that don't have an ID
         }

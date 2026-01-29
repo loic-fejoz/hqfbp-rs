@@ -1,5 +1,5 @@
 use hqfbp_rs::ContentEncoding;
-use hqfbp_rs::codec::{rq_decode, rq_encode};
+use hqfbp_rs::codec::rq::{rq_decode, rq_encode};
 use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::generator::PDUGenerator;
 

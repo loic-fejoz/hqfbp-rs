@@ -1,6 +1,5 @@
-use crate::codec::*;
 use crate::error::{HqfbpError, Result};
-use crate::{CodecError, ContentEncoding, EncodingList, Header, MediaType, unpack};
+use crate::{ContentEncoding, EncodingList, Header, MediaType, unpack};
 use bytes::Bytes;
 use std::collections::{HashMap, VecDeque};
 
@@ -27,6 +26,7 @@ pub struct Deframer {
     sessions: HashMap<(Option<String>, u32), Session>,
     announcements: HashMap<(Option<String>, u32), Vec<ContentEncoding>>,
     not_yet_decoded: Vec<Bytes>,
+    encoding_factory: crate::codec::EncodingFactory,
 }
 
 struct Session {
@@ -61,6 +61,7 @@ impl Deframer {
             sessions: HashMap::new(),
             announcements: HashMap::new(),
             not_yet_decoded: Vec::new(),
+            encoding_factory: crate::codec::EncodingFactory::new(),
         }
     }
 
@@ -84,9 +85,11 @@ impl Deframer {
         let is_fragmented =
             header.total_chunks.unwrap_or(1) > 1 || header.chunk_id.unwrap_or(0) > 0;
 
+        // Calculate Last Splitting Index (lsi)
         let mut lsi = -1;
         for (i, e) in pre.iter().enumerate() {
-            if e.is_chunking()
+            let encoder = self.encoding_factory.get_encoding(e);
+            if encoder.is_chunking()
                 || matches!(
                     e,
                     ContentEncoding::ReedSolomon(_, _) | ContentEncoding::Golay(_, _)
@@ -197,31 +200,40 @@ impl Deframer {
                 if let Ok((clean_pdu, q)) =
                     self.apply_decodings_multi(vec![b_data.clone()], &post, None, false)
                 {
-                    if let Ok((mut h2, p2)) = unpack(clean_pdu) {
-                        self.strip_post_h_encodings(&mut h2);
-                        if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
-                            let src_c = h2.src_callsign.clone();
-                            let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
-                            let session_key = (src_c, orig_id);
-                            let chunk_id = h2.chunk_id.unwrap_or(0);
-                            let new_quality = q + q_gain;
+                    match unpack(clean_pdu.clone()) {
+                        Ok((mut h2, p2)) => {
+                            self.strip_post_h_encodings(&mut h2);
+                            if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
+                                let src_c = h2.src_callsign.clone();
+                                let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
+                                let session_key = (src_c, orig_id);
+                                let chunk_id = h2.chunk_id.unwrap_or(0);
+                                let new_quality = q + q_gain;
 
-                            let already_had_better =
-                                if let Some(s) = self.sessions.get(&session_key) {
-                                    if let Some(existing) = s.chunks.get(&chunk_id) {
-                                        existing.1 >= new_quality
+                                let already_had_better =
+                                    if let Some(s) = self.sessions.get(&session_key) {
+                                        if let Some(existing) = s.chunks.get(&chunk_id) {
+                                            existing.1 >= new_quality
+                                        } else {
+                                            false
+                                        }
                                     } else {
                                         false
-                                    }
-                                } else {
-                                    false
-                                };
+                                    };
 
-                            if !already_had_better {
-                                self.process_pdu(h2, p3, new_quality);
-                                reclaimed_any = true;
-                                single_success = true;
+                                if !already_had_better {
+                                    self.process_pdu(h2, p3, new_quality);
+                                    reclaimed_any = true;
+                                    single_success = true;
+                                }
                             }
+                        }
+                        Err(e) => {
+                            println!(
+                                "Deframer: Phase 2 unpack failed: {:?}, Bytes: {}",
+                                e,
+                                hex::encode(clean_pdu)
+                            );
                         }
                     }
                 }
@@ -233,7 +245,9 @@ impl Deframer {
                 // If post contains ONLY packet-local encodings (RS, CRC, Scrambler),
                 // group decoding is useless because they would have passed Phase 1 if valid.
                 // We only need to retry group decoding if there are "Combiners" (RQ, Chunk, Repeat).
-                let has_combiner = post.iter().any(|e| e.is_chunking());
+                let has_combiner = post
+                    .iter()
+                    .any(|e| self.encoding_factory.get_encoding(e).is_chunking());
 
                 if !has_combiner {
                     continue;
@@ -308,8 +322,9 @@ impl Deframer {
         let mut current = input;
         let mut quality = 0.0;
 
-        for enc in encs.iter().rev() {
-            let (res, q) = enc.try_decode(current)?;
+        for enc_enum in encs.iter().rev() {
+            let encoder = self.encoding_factory.get_encoding(enc_enum);
+            let (res, q) = encoder.try_decode(current)?;
             current = res;
             quality += q;
         }
@@ -496,7 +511,8 @@ impl Deframer {
         // We must NOT re-apply these.
         let mut lsi = -1;
         for (i, e) in pre.iter().enumerate() {
-            if e.is_chunking()
+            let encoder = self.encoding_factory.get_encoding(e);
+            if encoder.is_chunking()
                 || matches!(
                     e,
                     ContentEncoding::ReedSolomon(_, _) | ContentEncoding::Golay(_, _)

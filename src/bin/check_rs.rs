@@ -1,5 +1,5 @@
 use clap::Parser;
-use hqfbp_rs::codec::rs_encode;
+use hqfbp_rs::codec::rs::rs_encode;
 use hqfbp_rs::error::Result;
 
 #[derive(Parser, Debug)]

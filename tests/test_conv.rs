@@ -1,5 +1,5 @@
 use hqfbp_rs::ContentEncoding;
-use hqfbp_rs::codec::{conv_decode, conv_encode};
+use hqfbp_rs::codec::conv::{conv_decode, conv_encode};
 use hqfbp_rs::deframer::Deframer;
 use hqfbp_rs::generator::PDUGenerator;
 

@@ -1,3 +1,7 @@
+use crate::ContentEncoding;
+use crate::codec::{Encoding, EncodingContext};
+use crate::error::CodecError;
+use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 
 /// SplitMix64 PRNG - Deterministic Cross-Language
@@ -325,6 +329,124 @@ impl LTDecoder {
         }
         res.truncate(self.total_len);
         Some(res)
+    }
+}
+
+pub struct LT {
+    len: usize,
+    mtu: u16,
+    repair_count: u32,
+}
+
+impl LT {
+    pub fn new(len: usize, mtu: u16, repair_count: u32) -> Self {
+        Self {
+            len,
+            mtu,
+            repair_count,
+        }
+    }
+}
+
+pub struct LTDynamic {
+    mtu: u16,
+    repair_count: u32,
+}
+
+impl LTDynamic {
+    pub fn new(mtu: u16, repair_count: u32) -> Self {
+        Self { mtu, repair_count }
+    }
+}
+
+pub fn lt_encode(
+    data: &[u8],
+    original_count: usize,
+    mtu: u16,
+    repair_count: u32,
+) -> Result<Vec<Bytes>, CodecError> {
+    if mtu == 0 || original_count == 0 {
+        return Ok(Vec::new());
+    }
+    let encoder = LTEncoder::new(data.to_vec(), mtu as usize);
+    let packets = encoder.encode(repair_count as usize);
+
+    Ok(packets.into_iter().map(Bytes::from).collect())
+}
+
+pub fn lt_decode(
+    packets: Vec<Bytes>,
+    original_count: usize,
+    mtu: u16,
+) -> Result<Vec<u8>, CodecError> {
+    if mtu == 0 || original_count == 0 {
+        return Ok(Vec::new());
+    }
+    let mut decoder = LTDecoder::new(original_count, mtu as usize);
+
+    for packet_bytes in packets {
+        if packet_bytes.len() < 4 + (mtu as usize) {
+            continue;
+        }
+        decoder.decode(&packet_bytes);
+    }
+
+    if let Some(res) = decoder.get_result() {
+        Ok(res)
+    } else {
+        Err(CodecError::InsufficientData(None))
+    }
+}
+
+impl Encoding for LT {
+    fn encode(
+        &self,
+        data: Vec<Bytes>,
+        _ctx: &mut EncodingContext,
+    ) -> Result<Vec<Bytes>, CodecError> {
+        let mut res = Vec::new();
+        for chunk in data {
+            res.extend(lt_encode(&chunk, self.len, self.mtu, self.repair_count)?);
+        }
+        Ok(res)
+    }
+
+    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+        let res = lt_decode(chunks, self.len, self.mtu)?;
+        Ok((vec![Bytes::from(res)], 10.0))
+    }
+
+    fn is_chunking(&self) -> bool {
+        true
+    }
+}
+
+impl Encoding for LTDynamic {
+    fn encode(
+        &self,
+        data: Vec<Bytes>,
+        ctx: &mut EncodingContext,
+    ) -> Result<Vec<Bytes>, CodecError> {
+        let mut res = Vec::new();
+        for chunk in data {
+            let len = chunk.len();
+            let resolved = ContentEncoding::LT(len, self.mtu, self.repair_count);
+            if ctx.current_index < ctx.encodings.len() {
+                ctx.encodings[ctx.current_index] = resolved;
+            }
+            res.extend(lt_encode(&chunk, len, self.mtu, self.repair_count)?);
+        }
+        Ok(res)
+    }
+
+    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+        let total_len: usize = chunks.iter().map(|b| b.len()).sum();
+        let res = lt_decode(chunks, total_len, self.mtu)?;
+        Ok((vec![Bytes::from(res)], 10.0))
+    }
+
+    fn is_chunking(&self) -> bool {
+        true
     }
 }
 

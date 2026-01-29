@@ -1,4 +1,4 @@
-use hqfbp_rs::codec::rq_encode;
+use hqfbp_rs::codec::rq::rq_encode;
 
 fn main() {
     // rq(dlen, 80, 64) with file-size 1024

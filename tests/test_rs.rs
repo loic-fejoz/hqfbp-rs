@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use hqfbp_rs::codec::{rs_decode, rs_encode};
+    use hqfbp_rs::codec::rs::{rs_decode, rs_encode};
 
     #[test]
     fn test_rs_correction() {

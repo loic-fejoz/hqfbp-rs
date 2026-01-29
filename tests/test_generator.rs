@@ -1,5 +1,7 @@
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use hqfbp_rs::codec::crc16::crc16_ccitt;
+use hqfbp_rs::codec::crc32::crc32_std;
 use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::{ContentEncoding, Header, MediaType, unpack};
 use std::io::Write;
@@ -111,7 +113,7 @@ fn test_generator_single_lzma_pdu() {
         _ => panic!("Expected encoding list"),
     }
 
-    let compressed = hqfbp_rs::codec::lzma_compress(&data).unwrap();
+    let compressed = hqfbp_rs::codec::lzma::lzma_compress(&data).unwrap();
     assert_eq!(payload.as_ref(), compressed);
 }
 
@@ -191,7 +193,7 @@ fn test_generator_crc_payload_only() {
     let crc = &payload[payload.len() - 4..];
     let original = &payload[..payload.len() - 4];
     assert_eq!(original, data);
-    assert_eq!(crc, hqfbp_rs::codec::crc32_std(original));
+    assert_eq!(crc, crc32_std(original));
 }
 
 #[test]
@@ -212,7 +214,7 @@ fn test_generator_crc_covering_header() {
     let pdu = pdus[0].clone();
     let crc = &pdu[pdu.len() - 4..];
     let pdu_no_crc = pdu.slice(..pdu.len() - 4);
-    assert_eq!(crc, hqfbp_rs::codec::crc32_std(&pdu_no_crc));
+    assert_eq!(crc, crc32_std(&pdu_no_crc));
 
     // Now unpack the PDU without CRC
     let (header, payload) = unpack(pdu_no_crc).expect("Unpack failed");
@@ -248,7 +250,7 @@ fn test_generator_announcement() {
     let ann_pdu = pdus[0].clone();
     let ann_crc = &ann_pdu[ann_pdu.len() - 2..];
     let ann_pdu_no_crc = ann_pdu.slice(..ann_pdu.len() - 2);
-    assert_eq!(ann_crc, hqfbp_rs::codec::crc16_ccitt(&ann_pdu_no_crc));
+    assert_eq!(ann_crc, crc16_ccitt(&ann_pdu_no_crc));
 
     let (ann_h, ann_p_bytes) = unpack(ann_pdu_no_crc).expect("Unpack ann failed");
     assert_eq!(
@@ -277,7 +279,7 @@ fn test_generator_announcement() {
     let data_pdu = pdus[1].clone();
     let data_crc = &data_pdu[data_pdu.len() - 4..];
     let data_pdu_no_crc = data_pdu.slice(..data_pdu.len() - 4);
-    assert_eq!(data_crc, hqfbp_rs::codec::crc32_std(&data_pdu_no_crc));
+    assert_eq!(data_crc, crc32_std(&data_pdu_no_crc));
     let (data_h, data_p) = unpack(data_pdu_no_crc).expect("Unpack data failed");
 
     assert_eq!(data_h.message_id, Some(2));

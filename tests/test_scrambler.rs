@@ -1,5 +1,5 @@
 use hqfbp_rs::ContentEncoding;
-use hqfbp_rs::codec::scr_xor;
+use hqfbp_rs::codec::scr::scr_xor;
 use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::generator::PDUGenerator;
 

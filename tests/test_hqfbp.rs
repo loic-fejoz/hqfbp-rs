@@ -215,7 +215,8 @@ fn test_pack_optimization() {
 
 #[test]
 fn test_crc_helpers() {
-    use hqfbp_rs::codec::{crc16_ccitt, crc32_std};
+    use hqfbp_rs::codec::crc16::crc16_ccitt;
+    use hqfbp_rs::codec::crc32::crc32_std;
     let data = b"hello";
 
     let c16 = crc16_ccitt(data);
