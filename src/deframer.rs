@@ -86,15 +86,12 @@ impl Deframer {
 
         let mut lsi = -1;
         for (i, e) in pre.iter().enumerate() {
-            if matches!(
-                e,
-                ContentEncoding::Chunk(_)
-                    | ContentEncoding::Repeat(_)
-                    | ContentEncoding::RaptorQ(_, _, _)
-                    | ContentEncoding::ReedSolomon(_, _)
-                    | ContentEncoding::LT(_, _, _)
-                    | ContentEncoding::Golay(_, _)
-            ) {
+            if e.is_chunking()
+                || matches!(
+                    e,
+                    ContentEncoding::ReedSolomon(_, _) | ContentEncoding::Golay(_, _)
+                )
+            {
                 lsi = i as i32;
             }
         }
@@ -236,18 +233,7 @@ impl Deframer {
                 // If post contains ONLY packet-local encodings (RS, CRC, Scrambler),
                 // group decoding is useless because they would have passed Phase 1 if valid.
                 // We only need to retry group decoding if there are "Combiners" (RQ, Chunk, Repeat).
-                let has_combiner = post.iter().any(|e| {
-                    matches!(
-                        e,
-                        ContentEncoding::RaptorQ(_, _, _)
-                            | ContentEncoding::RaptorQDynamic(_, _)
-                            | ContentEncoding::LT(_, _, _)
-                            | ContentEncoding::LTDynamic(_, _)
-                            | ContentEncoding::Chunk(_)
-                            | ContentEncoding::Repeat(_)
-                            | ContentEncoding::H
-                    )
-                });
+                let has_combiner = post.iter().any(|e| e.is_chunking());
 
                 if !has_combiner {
                     continue;
@@ -302,79 +288,30 @@ impl Deframer {
         self.process_pdu(header.unwrap(), payload.unwrap(), pdu_quality);
     }
 
+    fn apply_decodings(
+        &self,
+        data: Bytes,
+        encodings: &[ContentEncoding],
+        header: Option<&Header>,
+        header_already_unpacked: bool,
+    ) -> Result<(Bytes, usize)> {
+        self.apply_decodings_multi(vec![data], encodings, header, header_already_unpacked)
+    }
+
     fn apply_decodings_multi(
         &self,
         input: Vec<Bytes>,
         encs: &[ContentEncoding],
-        header: Option<&Header>,
+        _header: Option<&Header>,
         _header_already_unpacked: bool,
     ) -> Result<(Bytes, usize)> {
         let mut current = input;
-        let mut quality = 0;
+        let mut quality = 0.0;
 
         for enc in encs.iter().rev() {
-            match enc {
-                ContentEncoding::H | ContentEncoding::Chunk(_) => {
-                    let mut joined = Vec::new();
-                    for b in &current {
-                        joined.extend_from_slice(b);
-                    }
-                    current = vec![Bytes::from(joined)];
-                }
-                ContentEncoding::Identity => {}
-                ContentEncoding::Repeat(count) => {
-                    if current.len() > 1 && *count > 0 {
-                        current = current.into_iter().step_by(*count as usize).collect();
-                    }
-                }
-                ContentEncoding::RaptorQ(rq_len, mtu, _) => {
-                    let res = rq_decode(current.clone(), *rq_len, *mtu)?;
-                    current = vec![Bytes::from(res)];
-                    quality += 10;
-                }
-                ContentEncoding::RaptorQDynamic(mtu, _) => {
-                    // For Dynamic RQ in Phase 2, we estimate rq_len from total received data
-                    let total_len: usize = current.iter().map(|b| b.len()).sum();
-                    // Assuming total_len is a multiple of (mtu + overhead), but we try our best
-                    let res = rq_decode(current, total_len, *mtu)?;
-                    current = vec![Bytes::from(res)];
-                    quality += 10;
-                }
-                ContentEncoding::LT(len, mtu, _) => {
-                    let res = lt_decode(current.clone(), *len, *mtu)?;
-                    current = vec![Bytes::from(res)];
-                    quality += 10;
-                }
-                ContentEncoding::LTDynamic(mtu, _) => {
-                    let total_len: usize = current.iter().map(|b| b.len()).sum();
-                    let res = lt_decode(current, total_len, *mtu)?;
-                    current = vec![Bytes::from(res)];
-                    quality += 10;
-                }
-                other => {
-                    if current.len() == 1 {
-                        let (d, q) = self.apply_decodings(
-                            current.remove(0),
-                            std::slice::from_ref(other),
-                            header,
-                            false,
-                        )?;
-                        current = vec![d];
-                        quality += q;
-                    } else {
-                        let mut next = Vec::new();
-                        for b in current {
-                            if let Ok((d, q)) =
-                                self.apply_decodings(b, std::slice::from_ref(other), header, false)
-                            {
-                                next.push(d);
-                                quality += q;
-                            }
-                        }
-                        current = next;
-                    }
-                }
-            }
+            let (res, q) = enc.try_decode(current)?;
+            current = res;
+            quality += q;
         }
 
         let mut final_data = Vec::new();
@@ -382,11 +319,13 @@ impl Deframer {
             final_data.extend_from_slice(&b);
         }
         if final_data.is_empty() {
+            // If input was not empty but output is, maybe it's valid empty payload?
+            // But existing logic returned error.
             return Err(HqfbpError::Other(
                 "Empty data after multi-decoding".to_string(),
             ));
         }
-        Ok((Bytes::from(final_data), quality))
+        Ok((Bytes::from(final_data), quality as usize))
     }
 
     fn process_pdu(&mut self, header: Header, payload: Bytes, pdu_quality: usize) {
@@ -525,167 +464,6 @@ impl Deframer {
         }
     }
 
-    fn apply_decodings(
-        &self,
-        mut data: Bytes,
-        encodings: &[ContentEncoding],
-        _header: Option<&Header>,
-        _header_already_unpacked: bool,
-    ) -> Result<(Bytes, usize)> {
-        let mut quality = 0;
-        for enc in encodings.iter().rev() {
-            match enc {
-                ContentEncoding::H => {}
-                ContentEncoding::Identity => {}
-                ContentEncoding::Gzip => data = Bytes::from(gzip_decompress(&data)?),
-                ContentEncoding::Brotli => data = Bytes::from(brotli_decompress(&data)?),
-                ContentEncoding::Lzma => data = Bytes::from(lzma_decompress(&data)?),
-                ContentEncoding::Crc32 => {
-                    let mut valid_len = None;
-                    if data.len() >= 4 {
-                        let payload = data.slice(..data.len() - 4);
-                        let expected = &data[data.len() - 4..];
-                        if crc32_std(&payload) == expected {
-                            valid_len = Some(payload.len());
-                        }
-                    }
-
-                    if valid_len.is_none() && data.len() > 4 {
-                        let mut test_len = data.len() - 1;
-                        let min_len = if data.len() > 300 {
-                            data.len() - 256
-                        } else {
-                            4
-                        };
-
-                        while test_len >= min_len {
-                            let payload_check_len = test_len - 4;
-                            let payload = data.slice(..payload_check_len);
-                            let expected = &data[payload_check_len..test_len];
-                            if crc32_std(&payload) == expected {
-                                valid_len = Some(payload.len());
-                                break;
-                            }
-                            test_len -= 1;
-                        }
-                    }
-
-                    if let Some(vl) = valid_len {
-                        data = data.slice(..vl);
-                        quality += 1000;
-                    } else {
-                        return Err(CodecError::CrcMismatch.into());
-                    }
-                }
-                ContentEncoding::Crc16 => {
-                    let mut valid_len = None;
-                    if data.len() >= 2 {
-                        let payload = data.slice(..data.len() - 2);
-                        let expected = &data[data.len() - 2..];
-                        if crc16_ccitt(&payload) == expected {
-                            valid_len = Some(payload.len());
-                        }
-                    }
-
-                    if valid_len.is_none() && data.len() > 2 {
-                        let mut test_len = data.len() - 1;
-                        let min_len = if data.len() > 300 {
-                            data.len() - 256
-                        } else {
-                            2
-                        };
-
-                        while test_len >= min_len {
-                            let payload_check_len = test_len - 2;
-                            let payload = data.slice(..payload_check_len);
-                            let expected = &data[payload_check_len..test_len];
-                            if crc16_ccitt(&payload) == expected {
-                                valid_len = Some(payload.len());
-                                break;
-                            }
-                            test_len -= 1;
-                        }
-                    }
-
-                    if let Some(vl) = valid_len {
-                        data = data.slice(..vl);
-                        quality += 1000;
-                    } else {
-                        return Err(CodecError::CrcMismatch.into());
-                    }
-                }
-                ContentEncoding::ReedSolomon(n, k) => match rs_decode(&data, *n, *k) {
-                    Ok((d2, corrected)) => {
-                        data = Bytes::from(d2);
-                        let num_blocks = data.len() / k;
-                        let max_correctable = ((n - k) / 2) * num_blocks;
-                        quality += max_correctable.saturating_sub(corrected);
-                    }
-                    Err(e) => return Err(e.into()),
-                },
-                ContentEncoding::Repeat(_count) => {
-                    // In HQFBP, Repeat after the boundary (PDU-level) typically means
-                    // multiple PDUs are generated. When we have a single PDU (Bytes),
-                    // it's already one copy. Slicing it would destroy it (e.g. if it's RS encoded).
-                    // We only slice at the reassembly level (apply_decodings_multi).
-                }
-                ContentEncoding::Conv(k_val, rate) => {
-                    let (d2, metric) = conv_decode(&data, *k_val, rate)?;
-                    data = Bytes::from(d2);
-                    quality += (data.len() * 8).saturating_sub(metric);
-                }
-                ContentEncoding::Scrambler(poly, seed) => {
-                    data = Bytes::from(scr_xor(&data, *poly, *seed));
-                }
-                ContentEncoding::PostAsm(w) => {
-                    if data.ends_with(w) {
-                        data = data.slice(..data.len() - w.len());
-                        quality += 1000;
-                    } else {
-                        return Err(HqfbpError::Other(format!(
-                            "Post-ASM sync word mismatch: expected {}",
-                            hex::encode(w)
-                        )));
-                    }
-                }
-                ContentEncoding::Golay(_, _) => {
-                    let (d2, corrected) = golay_decode(&data)?;
-                    data = Bytes::from(d2);
-                    quality += corrected;
-                }
-                ContentEncoding::RaptorQ(rq_len, mtu, _) => {
-                    data = Bytes::from(rq_decode(vec![data], *rq_len, *mtu)?);
-                    quality += 10;
-                }
-                ContentEncoding::RaptorQDynamic(mtu, _) => {
-                    let rq_len = data.len();
-                    data = Bytes::from(rq_decode(vec![data], rq_len, *mtu)?);
-                    quality += 10;
-                }
-                ContentEncoding::RaptorQDynamicPercent(mtu, percent) => {
-                    let rq_len = data.len() * (*percent as usize) / 100;
-                    data = Bytes::from(rq_decode(vec![data], rq_len, *mtu)?);
-                    quality += 10;
-                }
-                ContentEncoding::LT(len, mtu, _) => {
-                    data = Bytes::from(lt_decode(vec![data], *len, *mtu)?);
-                    quality += 10;
-                }
-                ContentEncoding::LTDynamic(mtu, _) => {
-                    let len = data.len();
-                    data = Bytes::from(lt_decode(vec![data], len, *mtu)?);
-                    quality += 10;
-                }
-                ContentEncoding::Chunk(_) => {}
-                ContentEncoding::OtherString(_)
-                | ContentEncoding::OtherInteger(_)
-                | ContentEncoding::Deflate => {}
-            }
-        }
-        log::debug!("Decoded PDU quality={}", quality);
-        Ok((data, quality))
-    }
-
     fn complete_message(&mut self, key: (Option<String>, u32)) {
         let Some(session) = self.sessions.remove(&key) else {
             return;
@@ -718,15 +496,12 @@ impl Deframer {
         // We must NOT re-apply these.
         let mut lsi = -1;
         for (i, e) in pre.iter().enumerate() {
-            if matches!(
-                e,
-                ContentEncoding::Chunk(_)
-                    | ContentEncoding::Repeat(_)
-                    | ContentEncoding::RaptorQ(_, _, _)
-                    | ContentEncoding::ReedSolomon(_, _)
-                    | ContentEncoding::LT(_, _, _)
-                    | ContentEncoding::Golay(_, _)
-            ) {
+            if e.is_chunking()
+                || matches!(
+                    e,
+                    ContentEncoding::ReedSolomon(_, _) | ContentEncoding::Golay(_, _)
+                )
+            {
                 lsi = i as i32;
             }
         }

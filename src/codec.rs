@@ -10,8 +10,60 @@ use reed_solomon::Encoder as RSEncoder;
 use std::io::{Cursor, Read, Write};
 pub mod golay;
 pub mod lt;
+use crate::{ContentEncoding, EncodingList, Header, MediaType, pack};
 use golay::{golay_decode as golay_dec, golay_encode as golay_enc};
 use lt::{LTDecoder, LTEncoder};
+
+pub struct EncodingContext {
+    pub src_callsign: Option<String>,
+    pub dst_callsign: Option<String>,
+    pub next_msg_id: u32,
+    pub original_message_id: Option<u32>,
+    pub last_min_header_size: usize,
+    pub last_max_header_size: usize,
+    pub last_total_header_size: usize,
+    pub file_size: Option<u64>,
+    pub media_type: Option<MediaType>,
+    pub encodings: Vec<ContentEncoding>,
+    pub announcement_mode: bool,
+    pub current_index: usize,
+}
+
+impl Default for EncodingContext {
+    fn default() -> Self {
+        Self {
+            src_callsign: None,
+            dst_callsign: None,
+            next_msg_id: 0,
+            original_message_id: None,
+            last_min_header_size: 0,
+            last_max_header_size: 0,
+            last_total_header_size: 0,
+            file_size: None,
+            media_type: None,
+            encodings: Vec::new(),
+            announcement_mode: false,
+            current_index: 0,
+        }
+    }
+}
+
+pub trait Encoding {
+    fn encode(&self, data: Vec<Bytes>, ctx: &mut EncodingContext)
+    -> Result<Vec<Bytes>, CodecError>;
+
+    // try_decode is the primary decoding method, returning data and confidence/quality
+    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError>;
+
+    // decode provides a convenience wrapper around try_decode
+    fn decode(&self, chunks: Vec<Bytes>) -> Result<Vec<Bytes>, CodecError> {
+        self.try_decode(chunks).map(|(res, _)| res)
+    }
+
+    fn is_chunking(&self) -> bool {
+        false
+    }
+}
 
 pub const ENCODING_REGISTRY: &[(i8, &str)] = &[
     (-1, "h"),
@@ -93,7 +145,7 @@ pub fn lzma_compress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     Ok(res)
 }
 
-pub fn lzma_decompress(data: &[u8]) -> Result<Vec<u8>> {
+pub fn lzma_decompress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     let mut res = Vec::new();
     lzma_rs::xz_decompress(&mut Cursor::new(data), &mut res)
         .map_err(|e| CodecError::CompressionError(format!("XZ decompress failed: {e}")))?;
@@ -537,6 +589,365 @@ pub fn golay_encode(data: &[u8]) -> Result<Vec<u8>, CodecError> {
 
 pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize), CodecError> {
     golay_dec(data).map_err(|e| CodecError::FecFailure(e.to_string()))
+}
+
+impl Encoding for ContentEncoding {
+    fn encode(
+        &self,
+        data: Vec<Bytes>,
+        ctx: &mut EncodingContext,
+    ) -> Result<Vec<Bytes>, CodecError> {
+        match self {
+            ContentEncoding::H => {
+                let total_chunks = data.len() as u32;
+                let mut new_chunks = Vec::new();
+                let data_orig_id = ctx.next_msg_id;
+
+                let mut header_template = Header {
+                    file_size: ctx.file_size,
+                    src_callsign: ctx.src_callsign.clone(),
+                    dst_callsign: ctx.dst_callsign.clone(),
+                    ..Default::default()
+                };
+                header_template.set_media_type(ctx.media_type.clone());
+
+                // Only enable announcement mode logic if we were asked?
+                // In generator.rs, announcement logic is separate.
+                // H encoding just wraps what it's given.
+
+                for (idx, chunk_data) in data.iter().enumerate() {
+                    let mut header = header_template.clone();
+
+                    let msg_id = if idx == 0 {
+                        let id = data_orig_id;
+                        if ctx.next_msg_id == id {
+                            ctx.next_msg_id += 1;
+                        }
+                        id
+                    } else {
+                        let id = ctx.next_msg_id;
+                        ctx.next_msg_id += 1;
+                        id
+                    };
+
+                    if total_chunks > 1 {
+                        header.total_chunks = Some(total_chunks);
+                        header.chunk_id = Some(idx as u32);
+                        header.original_message_id = Some(data_orig_id);
+                    }
+                    header.message_id = Some(msg_id);
+
+                    if idx > 0 {
+                        header.set_media_type(None);
+                    }
+
+                    header.content_encoding = Some(EncodingList(ctx.encodings.clone()));
+                    header.payload_size = Some(chunk_data.len() as u64);
+
+                    let packed = pack(&header, chunk_data)
+                        .map_err(|e| CodecError::InvalidParameters(e.to_string()))?;
+                    let h_size = packed.len() - chunk_data.len();
+                    ctx.last_min_header_size = ctx.last_min_header_size.min(h_size);
+                    ctx.last_max_header_size = ctx.last_max_header_size.max(h_size);
+                    ctx.last_total_header_size += h_size;
+
+                    new_chunks.push(packed);
+                }
+                Ok(new_chunks)
+            }
+            ContentEncoding::Chunk(size) => {
+                let mut next_chunks = Vec::new();
+                for chunk in data {
+                    let mut pos = 0;
+                    while pos < chunk.len() {
+                        let end = (pos + *size).min(chunk.len());
+                        next_chunks.push(chunk.slice(pos..end));
+                        pos = end;
+                    }
+                }
+                Ok(next_chunks)
+            }
+            ContentEncoding::Repeat(count) => {
+                let mut next_chunks = Vec::new();
+                for chunk in data {
+                    for _ in 0..*count {
+                        next_chunks.push(chunk.clone());
+                    }
+                }
+                Ok(next_chunks)
+            }
+            ContentEncoding::RaptorQDynamic(mtu, repairs) => {
+                // Resolve dynamic parameters
+                let mut next_chunks = Vec::new();
+                for chunk in data {
+                    let rq_len = chunk.len();
+                    // Update the context encoding list with resolved value
+                    let resolved = ContentEncoding::RaptorQ(rq_len, *mtu, *repairs);
+                    if ctx.current_index < ctx.encodings.len() {
+                        ctx.encodings[ctx.current_index] = resolved.clone();
+                    }
+
+                    let res = rq_encode(&chunk, rq_len, *mtu, *repairs)?;
+                    next_chunks.extend(res);
+                }
+                Ok(next_chunks)
+            }
+            ContentEncoding::RaptorQDynamicPercent(mtu, percent) => {
+                let mut next_chunks = Vec::new();
+                for chunk in data {
+                    let rq_len = chunk.len();
+                    let repairs = 1.max(
+                        (rq_len as f32 * (*percent as f32) / (100.0 * (*mtu as f32))).ceil() as u32,
+                    );
+                    let resolved = ContentEncoding::RaptorQ(rq_len, *mtu, repairs);
+                    if ctx.current_index < ctx.encodings.len() {
+                        ctx.encodings[ctx.current_index] = resolved.clone();
+                    }
+
+                    let res = rq_encode(&chunk, rq_len, *mtu, repairs)?;
+                    next_chunks.extend(res);
+                }
+                Ok(next_chunks)
+            }
+            ContentEncoding::LTDynamic(mtu, repairs) => {
+                let mut next_chunks = Vec::new();
+                for chunk in data {
+                    let len = chunk.len();
+                    let resolved = ContentEncoding::LT(len, *mtu, *repairs);
+                    if ctx.current_index < ctx.encodings.len() {
+                        ctx.encodings[ctx.current_index] = resolved.clone();
+                    }
+                    let res = lt_encode(&chunk, len, *mtu, *repairs)?;
+                    next_chunks.extend(res);
+                }
+                Ok(next_chunks)
+            }
+            // All other encodings apply 1:1 map
+            other => {
+                let mut next_chunks = Vec::new();
+                for chunk in data {
+                    let res = match other {
+                        ContentEncoding::Identity => chunk.to_vec(),
+                        ContentEncoding::Gzip => gzip_compress(&chunk)?,
+                        ContentEncoding::Brotli => brotli_compress(&chunk)?,
+                        ContentEncoding::Lzma => lzma_compress(&chunk)?,
+                        ContentEncoding::Crc16 => {
+                            let crc = crc16_ccitt(&chunk);
+                            let mut d = chunk.to_vec();
+                            d.extend_from_slice(&crc);
+                            d
+                        }
+                        ContentEncoding::Crc32 => {
+                            let crc = crc32_std(&chunk);
+                            let mut d = chunk.to_vec();
+                            d.extend_from_slice(&crc);
+                            d
+                        }
+                        ContentEncoding::ReedSolomon(n, k) => rs_encode(&chunk, *n, *k)?,
+                        ContentEncoding::RaptorQ(rq_len, mtu, repairs) => {
+                            let pkts = rq_encode(&chunk, *rq_len, *mtu, *repairs)?;
+                            // RQ encode returns Vec<Bytes>, handle it here
+                            next_chunks.extend(pkts);
+                            continue;
+                        }
+                        ContentEncoding::LT(len, mtu, repairs) => {
+                            let pkts = lt_encode(&chunk, *len, *mtu, *repairs)?;
+                            next_chunks.extend(pkts);
+                            continue;
+                        }
+                        ContentEncoding::Conv(k, rate) => conv_encode(&chunk, *k, rate)?,
+                        ContentEncoding::Scrambler(poly, seed) => scr_xor(&chunk, *poly, *seed),
+                        ContentEncoding::Golay(_, _) => golay_encode(&chunk)?,
+                        ContentEncoding::PostAsm(w) => {
+                            let mut d = chunk.to_vec();
+                            d.extend_from_slice(w);
+                            d
+                        }
+                        _ => chunk.to_vec(),
+                    };
+                    next_chunks.push(Bytes::from(res));
+                }
+                Ok(next_chunks)
+            }
+        }
+    }
+
+    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+        match self {
+            ContentEncoding::H | ContentEncoding::Chunk(_) => {
+                let mut joined = Vec::new();
+                for b in &chunks {
+                    joined.extend_from_slice(b);
+                }
+                Ok((vec![Bytes::from(joined)], 1.0))
+            }
+            ContentEncoding::Identity => Ok((chunks, 1.0)),
+            ContentEncoding::Repeat(count) => {
+                let mut res = Vec::new();
+                if chunks.len() > 1 && *count > 0 {
+                    let step = *count as usize;
+                    for i in (0..chunks.len()).step_by(step) {
+                        res.push(chunks[i].clone());
+                    }
+                } else {
+                    res = chunks;
+                }
+                Ok((res, 1.0))
+            }
+            ContentEncoding::RaptorQ(rq_len, mtu, _) => {
+                let res = rq_decode(chunks, *rq_len, *mtu)?;
+                Ok((vec![Bytes::from(res)], 10.0))
+            }
+            ContentEncoding::RaptorQDynamic(mtu, _) => {
+                let total_len: usize = chunks.iter().map(|b| b.len()).sum();
+                let res = rq_decode(chunks, total_len, *mtu)?;
+                Ok((vec![Bytes::from(res)], 10.0))
+            }
+            ContentEncoding::LT(len, mtu, _) => {
+                let res = lt_decode(chunks, *len, *mtu)?;
+                Ok((vec![Bytes::from(res)], 10.0))
+            }
+            ContentEncoding::LTDynamic(mtu, _) => {
+                let total_len: usize = chunks.iter().map(|b| b.len()).sum();
+                let res = lt_decode(chunks, total_len, *mtu)?;
+                Ok((vec![Bytes::from(res)], 10.0))
+            }
+            // For 1:1 mappings, we map each chunk. Quality is sum/avg?
+            // In deframer, quality is summed.
+            other => {
+                let mut next_chunks = Vec::new();
+                let mut total_quality = 0.0;
+
+                for chunk in chunks {
+                    let (d, q) = match other {
+                        ContentEncoding::Gzip => (Bytes::from(gzip_decompress(&chunk)?), 0.0),
+                        ContentEncoding::Brotli => (Bytes::from(brotli_decompress(&chunk)?), 0.0),
+                        ContentEncoding::Lzma => (Bytes::from(lzma_decompress(&chunk)?), 0.0),
+                        ContentEncoding::Crc32 => {
+                            // Copied from deframer logic
+                            let mut valid_len = None;
+                            let data = chunk;
+                            if data.len() >= 4 {
+                                let payload = data.slice(..data.len() - 4);
+                                let expected = &data[data.len() - 4..];
+                                if crc32_std(&payload) == expected {
+                                    valid_len = Some(payload.len());
+                                }
+                            }
+                            if valid_len.is_none() && data.len() > 4 {
+                                // Scan ... simplified for trait?
+                                // Deframer logic scans for sync.
+                                // Let's copy the scanning logic.
+                                let mut test_len = data.len() - 1;
+                                let min_len = if data.len() > 300 {
+                                    data.len() - 256
+                                } else {
+                                    4
+                                };
+                                while test_len >= min_len {
+                                    let payload_check_len = test_len - 4;
+                                    let payload = data.slice(..payload_check_len);
+                                    let expected = &data[payload_check_len..test_len];
+                                    if crc32_std(&payload) == expected {
+                                        valid_len = Some(payload.len());
+                                        break;
+                                    }
+                                    test_len -= 1;
+                                }
+                            }
+                            if let Some(vl) = valid_len {
+                                (data.slice(..vl), 1000.0)
+                            } else {
+                                return Err(CodecError::CrcMismatch);
+                            }
+                        }
+                        ContentEncoding::Crc16 => {
+                            let mut valid_len = None;
+                            let data = chunk;
+                            if data.len() >= 2 {
+                                let payload = data.slice(..data.len() - 2);
+                                let expected = &data[data.len() - 2..];
+                                if crc16_ccitt(&payload) == expected {
+                                    valid_len = Some(payload.len());
+                                }
+                            }
+                            if valid_len.is_none() && data.len() > 2 {
+                                let mut test_len = data.len() - 1;
+                                let min_len = if data.len() > 300 {
+                                    data.len() - 256
+                                } else {
+                                    2
+                                };
+                                while test_len >= min_len {
+                                    let payload_check_len = test_len - 2;
+                                    let payload = data.slice(..payload_check_len);
+                                    let expected = &data[payload_check_len..test_len];
+                                    if crc16_ccitt(&payload) == expected {
+                                        valid_len = Some(payload.len());
+                                        break;
+                                    }
+                                    test_len -= 1;
+                                }
+                            }
+                            if let Some(vl) = valid_len {
+                                (data.slice(..vl), 1000.0)
+                            } else {
+                                return Err(CodecError::CrcMismatch);
+                            }
+                        }
+                        ContentEncoding::ReedSolomon(n, k) => {
+                            let (d, corrected) = rs_decode(&chunk, *n, *k)?;
+                            let data = Bytes::from(d);
+                            let num_blocks = data.len() / k;
+                            let max_correctable = ((n - k) / 2) * num_blocks;
+                            let q = max_correctable.saturating_sub(corrected) as f32;
+                            (data, q)
+                        }
+                        ContentEncoding::Conv(k, rate) => {
+                            let (d, metric) = conv_decode(&chunk, *k, rate)?;
+                            let data = Bytes::from(d);
+                            let q = (data.len() * 8).saturating_sub(metric) as f32;
+                            (data, q)
+                        }
+                        ContentEncoding::Scrambler(poly, seed) => {
+                            (Bytes::from(scr_xor(&chunk, *poly, *seed)), 0.0)
+                        }
+                        ContentEncoding::Golay(_, _) => {
+                            let (d, corrected) = golay_decode(&chunk)?;
+                            (Bytes::from(d), corrected as f32)
+                        }
+                        ContentEncoding::PostAsm(w) => {
+                            if chunk.ends_with(w) {
+                                (chunk.slice(..chunk.len() - w.len()), 1000.0)
+                            } else {
+                                return Err(CodecError::InvalidParameters(
+                                    "PostAsm sync mismatch".into(),
+                                ));
+                            }
+                        }
+                        _ => (chunk, 0.0),
+                    };
+                    next_chunks.push(d);
+                    total_quality += q;
+                }
+                Ok((next_chunks, total_quality))
+            }
+        }
+    }
+
+    fn is_chunking(&self) -> bool {
+        matches!(
+            self,
+            ContentEncoding::H
+                | ContentEncoding::Chunk(_)
+                | ContentEncoding::Repeat(_)
+                | ContentEncoding::RaptorQ(_, _, _)
+                | ContentEncoding::RaptorQDynamic(_, _)
+                | ContentEncoding::RaptorQDynamicPercent(_, _)
+                | ContentEncoding::LT(_, _, _)
+                | ContentEncoding::LTDynamic(_, _)
+        )
+    }
 }
 
 #[cfg(test)]
