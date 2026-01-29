@@ -129,6 +129,9 @@ impl PDUGenerator {
                 ContentEncoding::Golay(_, _) => {
                     current_data = golay_encode(&current_data).map_err(HqfbpError::Codec)?;
                 }
+                ContentEncoding::PostAsm(w) => {
+                    current_data.extend_from_slice(w);
+                }
                 _ => {}
             }
         }

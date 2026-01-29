@@ -24,7 +24,7 @@ $CMD
 
 echo "Unpacking with Python unpack..."
 cd ../py-hqfbp
-uv run python src/hqfbp/unpack.py "../hqfbp-rs/$OUTPUT_DIR" --input "../hqfbp-rs/$KISS_FILE"
+uv run python src/hqfbp/kiss.py "../hqfbp-rs/$OUTPUT_DIR" --input "../hqfbp-rs/$KISS_FILE"
 cd ../hqfbp-rs
 
 UNPACKED_FILE=$(ls -t "$OUTPUT_DIR"/* | head -1)

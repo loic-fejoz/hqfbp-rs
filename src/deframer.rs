@@ -199,30 +199,32 @@ impl Deframer {
                 let mut single_success = false;
                 if let Ok((clean_pdu, q)) =
                     self.apply_decodings_multi(vec![b_data.clone()], &post, None, false)
-                    && let Ok((mut h2, p2)) = unpack(clean_pdu)
                 {
-                    self.strip_post_h_encodings(&mut h2);
-                    if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
-                        let src_c = h2.src_callsign.clone();
-                        let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
-                        let session_key = (src_c, orig_id);
-                        let chunk_id = h2.chunk_id.unwrap_or(0);
-                        let new_quality = q + q_gain;
+                    if let Ok((mut h2, p2)) = unpack(clean_pdu) {
+                        self.strip_post_h_encodings(&mut h2);
+                        if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
+                            let src_c = h2.src_callsign.clone();
+                            let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
+                            let session_key = (src_c, orig_id);
+                            let chunk_id = h2.chunk_id.unwrap_or(0);
+                            let new_quality = q + q_gain;
 
-                        let already_had_better = if let Some(s) = self.sessions.get(&session_key) {
-                            if let Some(existing) = s.chunks.get(&chunk_id) {
-                                existing.1 >= new_quality
-                            } else {
-                                false
+                            let already_had_better =
+                                if let Some(s) = self.sessions.get(&session_key) {
+                                    if let Some(existing) = s.chunks.get(&chunk_id) {
+                                        existing.1 >= new_quality
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                };
+
+                            if !already_had_better {
+                                self.process_pdu(h2, p3, new_quality);
+                                reclaimed_any = true;
+                                single_success = true;
                             }
-                        } else {
-                            false
-                        };
-
-                        if !already_had_better {
-                            self.process_pdu(h2, p3, new_quality);
-                            reclaimed_any = true;
-                            single_success = true;
                         }
                     }
                 }
@@ -634,6 +636,17 @@ impl Deframer {
                 }
                 ContentEncoding::Scrambler(poly, seed) => {
                     data = Bytes::from(scr_xor(&data, *poly, *seed));
+                }
+                ContentEncoding::PostAsm(w) => {
+                    if data.ends_with(w) {
+                        data = data.slice(..data.len() - w.len());
+                        quality += 1000;
+                    } else {
+                        return Err(HqfbpError::Other(format!(
+                            "Post-ASM sync word mismatch: expected {}",
+                            hex::encode(w)
+                        )));
+                    }
                 }
                 ContentEncoding::Golay(_, _) => {
                     let (d2, corrected) = golay_decode(&data)?;

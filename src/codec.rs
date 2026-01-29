@@ -22,6 +22,7 @@ pub const ENCODING_REGISTRY: &[(i8, &str)] = &[
     (4, "lzma"),
     (5, "crc16"),
     (6, "crc32"),
+    (56, "post_asm"),
 ];
 
 pub fn crc16_ccitt(data: &[u8]) -> [u8; 2] {
