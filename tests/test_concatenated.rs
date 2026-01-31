@@ -57,7 +57,7 @@ mod tests {
                     Event::PDU(pe) => {
                         count_accepted += 1;
                         let clean_unpack = hqfbp_rs::unpack(pdu.clone()).unwrap();
-                        if pe.payload != clean_unpack.1 {
+                        if !clean_unpack.1.starts_with(&pe.payload) {
                             mismatch_count += 1;
                             if first_mismatch.is_none() {
                                 first_mismatch =

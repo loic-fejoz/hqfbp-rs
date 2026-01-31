@@ -38,15 +38,14 @@ fn test_deframer_early_rq_decoding() {
         deframer.receive_bytes(pdu);
     }
 
-    // Check if decoded early
-    let mut found = false;
+    let mut msg_ev = None;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert_eq!(me.payload, data);
-            found = true;
+            msg_ev = Some(me);
         }
     }
-    assert!(found, "Message should be decoded after 10 packets");
+    let me = msg_ev.expect("Message should be decoded after 10 packets");
+    assert_eq!(me.payload, data);
 }
 
 #[test]
@@ -83,17 +82,14 @@ fn test_deframer_early_rq_with_loss() {
         deframer.receive_bytes(&pdus[i]);
     }
 
-    let mut found = false;
+    let mut msg_ev = None;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert_eq!(me.payload, data);
-            found = true;
+            msg_ev = Some(me);
         }
     }
-    assert!(
-        found,
-        "Should decode with 8 symbols even if some source packets are missing"
-    );
+    let me = msg_ev.expect("Should decode with 8 symbols even if some source packets are missing");
+    assert_eq!(me.payload, data);
 }
 
 #[test]
@@ -128,22 +124,24 @@ fn test_deframer_rq_wait_for_enough_symbols() {
         deframer.receive_bytes(pdu);
     }
 
-    // No MessageEvent yet
+    // No MessageEvent (other than announcement) yet
     while let Some(ev) = deframer.next_event() {
-        if let Event::Message(_) = ev {
-            panic!("Premature message event");
+        if let Event::Message(me) = ev {
+            if me.payload.len() == data.len() {
+                panic!("Premature message event");
+            }
         }
     }
 
     // Feed 4th packet
     deframer.receive_bytes(&pdus[4]);
 
-    let mut found = false;
+    let mut msg_ev = None;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert_eq!(me.payload, data);
-            found = true;
+            msg_ev = Some(me);
         }
     }
-    assert!(found);
+    let me = msg_ev.expect("Expected message event");
+    assert_eq!(me.payload, data);
 }

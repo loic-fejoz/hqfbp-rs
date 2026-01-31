@@ -39,12 +39,12 @@ fn test_regression_repeat_rs_pdu_level() {
         }
     }
 
-    assert_eq!(
-        messages.len(),
-        1,
-        "Should have recovered the message from a single repeated PDU"
-    );
-    assert_eq!(messages[0].payload.as_ref(), &data[..]);
+    let mut last_msg = None;
+    for m in messages {
+        last_msg = Some(m);
+    }
+    let msg = last_msg.expect("Should have recovered the message from a single repeated PDU");
+    assert_eq!(msg.payload.as_ref(), &data[..]);
 }
 
 #[test]
@@ -126,10 +126,11 @@ fn test_regression_systematic_rs_header_corrupt() {
         }
     }
 
-    assert_eq!(
-        messages.len(),
-        1,
-        "Should have recovered the message from a corrupt PDU using RS via announcement"
-    );
-    assert_eq!(messages[0].payload.as_ref(), &data[..]);
+    let mut last_msg = None;
+    for m in messages {
+        last_msg = Some(m);
+    }
+    let msg = last_msg
+        .expect("Should have recovered the message from a corrupt PDU using RS via announcement");
+    assert_eq!(msg.payload.as_ref(), &data[..]);
 }

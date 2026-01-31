@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub mod asm;
+pub mod ax25;
 pub mod brotli;
 pub mod chunk;
 pub mod conv;
@@ -22,7 +23,7 @@ pub mod rq;
 pub mod rs;
 pub mod scr;
 
-pub struct EncodingContext {
+pub struct CodecContext {
     pub src_callsign: Option<String>,
     pub dst_callsign: Option<String>,
     pub next_msg_id: u32,
@@ -37,7 +38,7 @@ pub struct EncodingContext {
     pub current_index: usize,
 }
 
-impl Default for EncodingContext {
+impl Default for CodecContext {
     fn default() -> Self {
         Self {
             src_callsign: None,
@@ -56,9 +57,8 @@ impl Default for EncodingContext {
     }
 }
 
-pub trait Encoding: Send + Sync {
-    fn encode(&self, data: Vec<Bytes>, ctx: &mut EncodingContext)
-    -> Result<Vec<Bytes>, CodecError>;
+pub trait Codec: Send + Sync {
+    fn encode(&self, data: Vec<Bytes>, ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError>;
     fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError>;
     fn decode(&self, chunks: Vec<Bytes>) -> Result<Vec<Bytes>, CodecError> {
         self.try_decode(chunks).map(|(res, _)| res)
@@ -66,26 +66,32 @@ pub trait Encoding: Send + Sync {
     fn is_chunking(&self) -> bool {
         false
     }
+    fn is_header(&self) -> bool {
+        false
+    }
+    fn unpack_header(&self, _data: Bytes) -> Result<(crate::Header, Bytes), CodecError> {
+        Err(CodecError::FecFailure("Not a header encoding".to_string()))
+    }
 }
 
-pub struct EncodingFactory {
-    cache: Mutex<HashMap<ContentEncoding, Arc<dyn Encoding>>>,
+pub struct CodecFactory {
+    cache: Mutex<HashMap<ContentEncoding, Arc<dyn Codec>>>,
 }
 
-impl EncodingFactory {
+impl CodecFactory {
     pub fn new() -> Self {
         Self {
             cache: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn get_encoding(&self, enc: &ContentEncoding) -> Arc<dyn Encoding> {
+    pub fn get_encoding(&self, enc: &ContentEncoding) -> Arc<dyn Codec> {
         let mut cache = self.cache.lock().unwrap();
         if let Some(cached) = cache.get(enc) {
             return Arc::clone(cached);
         }
 
-        let encoder: Arc<dyn Encoding> = match enc {
+        let encoder: Arc<dyn Codec> = match enc {
             ContentEncoding::H => Arc::new(h::H::new()),
             ContentEncoding::Identity => Arc::new(identity::Identity::new()),
             ContentEncoding::Gzip => Arc::new(gzip::Gzip::new()),
@@ -110,6 +116,7 @@ impl EncodingFactory {
             ContentEncoding::PostAsm(w) => Arc::new(post_asm::PostAsm::new(w.clone())),
             ContentEncoding::Chunk(s) => Arc::new(chunk::Chunk::new(*s)),
             ContentEncoding::Repeat(n) => Arc::new(repeat::Repeat::new(*n)),
+            ContentEncoding::Ax25 => Arc::new(ax25::Ax25::new()),
             _ => Arc::new(identity::Identity::new()), // Fallback
         };
 
@@ -118,7 +125,7 @@ impl EncodingFactory {
     }
 }
 
-impl Default for EncodingFactory {
+impl Default for CodecFactory {
     fn default() -> Self {
         Self::new()
     }

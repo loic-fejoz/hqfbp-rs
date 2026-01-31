@@ -179,7 +179,7 @@ fn main() -> Result<()> {
             .map(|_| {
                 let mut local_rng = rand::thread_rng();
                 let size = if args.file_size < 0 {
-                    local_rng.gen_range(10..=(args.file_size.abs() as usize))
+                    local_rng.gen_range(10..=args.file_size.unsigned_abs() as usize)
                 } else {
                     args.file_size as usize
                 };

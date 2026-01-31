@@ -389,6 +389,10 @@ fn get_post_asm_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^post_asm\((0x[0-9a-fA-F]+|\d+)\)$").unwrap())
 }
+fn get_ax25_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^ax\.25$").unwrap())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ContentEncoding {
@@ -413,6 +417,7 @@ pub enum ContentEncoding {
     PostAsm(Vec<u8>),
     Chunk(usize),
     Repeat(usize),
+    Ax25,
     OtherString(String),
     OtherInteger(i8),
 }
@@ -455,6 +460,7 @@ impl std::fmt::Display for ContentEncoding {
             ContentEncoding::PostAsm(w) => write!(f, "post_asm(0x{})", hex::encode(w)),
             ContentEncoding::Chunk(s) => write!(f, "chunk({s})"),
             ContentEncoding::Repeat(n) => write!(f, "repeat({n})"),
+            ContentEncoding::Ax25 => write!(f, "ax.25"),
             ContentEncoding::OtherString(s) => write!(f, "{s}"),
             ContentEncoding::OtherInteger(i) => write!(f, "{i}"),
         }
@@ -480,6 +486,8 @@ impl TryFrom<&str> for ContentEncoding {
             Ok(ContentEncoding::Crc16)
         } else if s == "crc32" || s == "6" {
             Ok(ContentEncoding::Crc32)
+        } else if s == "ax.25" || s == "41" || get_ax25_re().is_match(s) {
+            Ok(ContentEncoding::Ax25)
         } else if let Some(m) = get_rs_re().captures(s) {
             Ok(ContentEncoding::ReedSolomon(m[1].parse()?, m[2].parse()?))
         } else if let Some(m) = get_rq_re().captures(s) {
@@ -508,7 +516,7 @@ impl TryFrom<&str> for ContentEncoding {
             Ok(ContentEncoding::LTDynamic(m[1].parse()?, m[2].parse()?))
         } else if let Some(m) = get_conv_re().captures(s) {
             Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
-        } else if let Some(_) = get_golay_re().captures(s) {
+        } else if get_golay_re().captures(s).is_some() {
             let m = get_golay_re().captures(s).unwrap();
             if let (Some(n), Some(k)) = (m.get(2), m.get(3)) {
                 Ok(ContentEncoding::Golay(
@@ -596,6 +604,7 @@ impl TryFrom<i8> for ContentEncoding {
             6 => Ok(ContentEncoding::Crc32),
             54 => Ok(ContentEncoding::Asm(Vec::new())),
             56 => Ok(ContentEncoding::PostAsm(Vec::new())), // Should not really happen from i8 unless it's just the ID
+            41 => Ok(ContentEncoding::Ax25),
             _ => Ok(ContentEncoding::OtherInteger(i)),
         }
     }
@@ -614,6 +623,7 @@ impl From<ContentEncoding> for i8 {
             ContentEncoding::Crc32 => 6,
             ContentEncoding::Asm(ref w) if w.is_empty() => 54,
             ContentEncoding::PostAsm(ref w) if w.is_empty() => 56,
+            ContentEncoding::Ax25 => 41,
             ContentEncoding::OtherInteger(i) => i,
             _ => 127, // Fallback for complex ones that don't have an ID
         }

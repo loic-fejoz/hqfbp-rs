@@ -1,6 +1,6 @@
 # Architecture: HQFBP Data Flow
 
-The project implements a layered transformation pipeline designed for radio link reliability.
+The project implements a layered transformation pipeline designed for radio link reliability. See **[Encoding Principles](file:///home/loic/projets/hqfbp-rs/agent_docs/encodings.md)** for the definitive rules on layer ordering and boundaries.
 
 ## 1. Transmission Pipeline (The Generator)
 The `PDUGenerator` ([src/generator.rs](file:///home/loic/projets/hqfbp-rs/src/generator.rs)) transforms a source payload into a stream of PDUs.

@@ -68,12 +68,12 @@ fn test_generator_deframer_conv_integration() {
 
     deframer.receive_bytes(&pdu_vec);
 
-    let mut found = false;
+    let mut last_msg = None;
     while let Some(ev) = deframer.next_event() {
         if let hqfbp_rs::deframer::Event::Message(me) = ev {
-            assert_eq!(me.payload.as_ref(), data);
-            found = true;
+            last_msg = Some(me);
         }
     }
-    assert!(found);
+    let me = last_msg.expect("Expected message event");
+    assert_eq!(me.payload.as_ref(), data);
 }

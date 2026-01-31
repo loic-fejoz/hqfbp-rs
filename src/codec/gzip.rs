@@ -1,4 +1,4 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 use flate2::Compression;
@@ -7,6 +7,12 @@ use flate2::write::GzEncoder;
 use std::io::{Read, Write};
 
 pub struct Gzip;
+
+impl Default for Gzip {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Gzip {
     pub fn new() -> Self {
@@ -19,9 +25,9 @@ pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     encoder
         .write_all(data)
         .map_err(|e| CodecError::CompressionError(format!("Gzip write failed: {e}")))?;
-    Ok(encoder
+    encoder
         .finish()
-        .map_err(|e| CodecError::CompressionError(format!("Gzip finish failed: {e}")))?)
+        .map_err(|e| CodecError::CompressionError(format!("Gzip finish failed: {e}")))
 }
 
 pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
@@ -33,12 +39,8 @@ pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     Ok(res)
 }
 
-impl Encoding for Gzip {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for Gzip {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             res.push(Bytes::from(gzip_compress(&chunk)?));

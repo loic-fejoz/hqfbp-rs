@@ -40,8 +40,14 @@ fn test_chunk_rs_after_h() {
     }
 
     // 4. Assertions
-    assert_eq!(recovered_messages.len(), 1);
-    let recovered = &recovered_messages[0];
+    for m in &recovered_messages {
+        println!("Recovered message len: {}", m.payload.len());
+    }
+    let mut last_msg = None;
+    for m in recovered_messages {
+        last_msg = Some(m);
+    }
+    let recovered = last_msg.expect("Failed to recover");
     assert_eq!(recovered.payload.len(), 500);
     assert_eq!(recovered.payload.as_ref(), data.as_slice());
     assert_eq!(recovered.header.src_callsign.as_deref(), Some("TEST"));

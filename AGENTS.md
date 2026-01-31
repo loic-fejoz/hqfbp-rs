@@ -29,6 +29,7 @@ Read these specialized docs in `agent_docs/` before starting specific tasks:
 2. **[Testing Guidelines](file:///home/loic/projets/hqfbp-rs/agent_docs/testing_guidelines.md):** How to use the simulation tools and regression suite. Read when adding features or fixing bugs.
 3. **[Conventions](file:///home/loic/projets/hqfbp-rs/agent_docs/conventions.md):** Protocol-specific patterns (Boundary markers, quality metrics). Read before any implementation work.
 4. **[Cross-Implementation Testing](file:///home/loic/projets/hqfbp-rs/agent_docs/cross_implementation_testing.md):** How to verify bit-accuracy against the Python reference implementation.
+5. **[Encoding Principles](file:///home/loic/projets/hqfbp-rs/agent_docs/encodings.md):** CRITICAL. Defines the Left-to-Right application order and Right-to-Left peeling order for encodings, and the role of Headers. Read before working on `Codec` or `Deframer`.
 
 > [!IMPORTANT]
 > **Python Reference Implementation**

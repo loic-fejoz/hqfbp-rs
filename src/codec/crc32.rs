@@ -1,9 +1,15 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 use crc::{CRC_32_ISO_HDLC, Crc};
 
 pub struct Crc32;
+
+impl Default for Crc32 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Crc32 {
     pub fn new() -> Self {
@@ -16,12 +22,8 @@ pub fn crc32_std(data: &[u8]) -> [u8; 4] {
     crc.checksum(data).to_be_bytes()
 }
 
-impl Encoding for Crc32 {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for Crc32 {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             let crc = crc32_std(&chunk);

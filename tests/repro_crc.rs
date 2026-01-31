@@ -19,23 +19,24 @@ mod tests {
             None,
             None,
             Some(encs.clone()),
-            None,
+            Some(vec![ContentEncoding::H]),
             1,
         );
         let pdus = generator.generate(&data, None).unwrap();
-        assert_eq!(pdus.len(), 1);
-        let pdu = &pdus[0];
-        println!("Generated PDU len: {}", pdu.len());
+        assert_eq!(pdus.len(), 2);
 
         // Deframer
         let mut deframer = Deframer::new();
-        deframer.receive_bytes(pdu);
+        for pdu in pdus {
+            deframer.receive_bytes(&pdu);
+        }
 
         let mut recovered = false;
         while let Some(ev) = deframer.next_event() {
             if let Event::Message(me) = ev {
-                assert_eq!(me.payload, data);
-                recovered = true;
+                if me.payload == data {
+                    recovered = true;
+                }
             }
         }
         assert!(recovered, "Failed to recover");

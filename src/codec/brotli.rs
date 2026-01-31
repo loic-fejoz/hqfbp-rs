@@ -1,9 +1,15 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 use std::io::{Read, Write};
 
 pub struct Brotli;
+
+impl Default for Brotli {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Brotli {
     pub fn new() -> Self {
@@ -33,12 +39,8 @@ pub fn brotli_decompress(data: &[u8]) -> Result<Vec<u8>, CodecError> {
     Ok(res)
 }
 
-impl Encoding for Brotli {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for Brotli {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             res.push(Bytes::from(brotli_compress(&chunk)?));

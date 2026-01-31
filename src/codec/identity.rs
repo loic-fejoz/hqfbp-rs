@@ -1,8 +1,14 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 
 pub struct Identity;
+
+impl Default for Identity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Identity {
     pub fn new() -> Self {
@@ -10,12 +16,8 @@ impl Identity {
     }
 }
 
-impl Encoding for Identity {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for Identity {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         Ok(data)
     }
 

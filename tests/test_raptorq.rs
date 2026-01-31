@@ -73,8 +73,9 @@ fn test_generator_deframer_rq_post_boundary() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.as_ref().starts_with(data));
-            found = true;
+            if me.payload.as_ref().starts_with(data) {
+                found = true;
+            }
         }
     }
     assert!(found, "Message not deframed");

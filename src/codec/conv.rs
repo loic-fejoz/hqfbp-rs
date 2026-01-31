@@ -1,4 +1,4 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 use once_cell::sync::Lazy;
@@ -196,12 +196,8 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     Ok((res, min_m as usize))
 }
 
-impl Encoding for Conv {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for Conv {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             res.push(Bytes::from(conv_encode(&chunk, self.k, &self.rate)?));

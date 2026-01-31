@@ -1,9 +1,15 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 use crc::Crc;
 
 pub struct Crc16;
+
+impl Default for Crc16 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Crc16 {
     pub fn new() -> Self {
@@ -26,12 +32,8 @@ pub fn crc16_ccitt(data: &[u8]) -> [u8; 2] {
     crc.checksum(data).to_be_bytes()
 }
 
-impl Encoding for Crc16 {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for Crc16 {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             let crc = crc16_ccitt(&chunk);

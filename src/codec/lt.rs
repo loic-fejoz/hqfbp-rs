@@ -1,5 +1,5 @@
 use crate::ContentEncoding;
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
@@ -398,12 +398,8 @@ pub fn lt_decode(
     }
 }
 
-impl Encoding for LT {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for LT {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             res.extend(lt_encode(&chunk, self.len, self.mtu, self.repair_count)?);
@@ -421,12 +417,8 @@ impl Encoding for LT {
     }
 }
 
-impl Encoding for LTDynamic {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for LTDynamic {
+    fn encode(&self, data: Vec<Bytes>, ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             let len = chunk.len();

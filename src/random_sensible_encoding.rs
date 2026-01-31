@@ -15,12 +15,9 @@ pub fn generate_sensible_encoding(seed: u64) -> EncodingList {
 
     // 8. Internal FEC:
     let rnd_8 = rng.gen_range(0..=1);
-    match rnd_8 {
-        0 => {
-            encodings.push(ContentEncoding::Conv(7, "1/2".to_string()));
-            current_mtu = current_mtu / 2;
-        }
-        _ => {} // ContentEncoding::ID
+    if rnd_8 == 0 {
+        encodings.push(ContentEncoding::Conv(7, "1/2".to_string()));
+        current_mtu /= 2;
     }
 
     // 7. External FEC
@@ -40,7 +37,7 @@ pub fn generate_sensible_encoding(seed: u64) -> EncodingList {
         2 => {
             // Conv
             encodings.push(ContentEncoding::Conv(7, "1/2".to_string()));
-            current_mtu = current_mtu / 2;
+            current_mtu /= 2;
         }
         _ => {} // ID
     }

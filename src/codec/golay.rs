@@ -1,4 +1,4 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 
@@ -13,9 +13,9 @@ const GOLAY_B: [u16; 12] = [
 /// Encodes 12 bits of data into a 24-bit codeword.
 pub fn encode_codeword(data: u16) -> u32 {
     let mut parity = 0u16;
-    for i in 0..12 {
+    for (i, &b) in GOLAY_B.iter().enumerate() {
         if (data >> (11 - i)) & 1 != 0 {
-            parity ^= GOLAY_B[i];
+            parity ^= b;
         }
     }
     ((data as u32) << 12) | (parity as u32)
@@ -26,9 +26,9 @@ fn compute_syndrome(received: u32) -> u16 {
     let data = (received >> 12) as u16;
     let parity = (received & 0xFFF) as u16;
     let mut expected_parity = 0u16;
-    for i in 0..12 {
+    for (i, &b) in GOLAY_B.iter().enumerate() {
         if (data >> (11 - i)) & 1 != 0 {
-            expected_parity ^= GOLAY_B[i];
+            expected_parity ^= b;
         }
     }
     parity ^ expected_parity
@@ -54,8 +54,8 @@ pub fn decode_codeword(received: u32) -> (u16, u32) {
     }
 
     // 2. Check if weight(s + Bi) <= 2
-    for i in 0..12 {
-        let si = s ^ GOLAY_B[i];
+    for (i, &bi) in GOLAY_B.iter().enumerate() {
+        let si = s ^ bi;
         if weight12(si) <= 2 {
             let error_pattern = (si as u32) | (1 << (23 - i));
             let corrected = received ^ error_pattern;
@@ -80,8 +80,8 @@ pub fn decode_codeword(received: u32) -> (u16, u32) {
     let mut s_prime = 0u16;
     for i in 0..12 {
         let mut row_sum = 0u8;
-        for j in 0..12 {
-            if (s & (1 << (11 - j))) != 0 && (GOLAY_B[j] & (1 << (11 - i))) != 0 {
+        for (j, &bj) in GOLAY_B.iter().enumerate() {
+            if (s & (1 << (11 - j))) != 0 && (bj & (1 << (11 - i))) != 0 {
                 row_sum ^= 1;
             }
         }
@@ -96,8 +96,8 @@ pub fn decode_codeword(received: u32) -> (u16, u32) {
         return ((corrected >> 12) as u16, weight12(s_prime));
     }
 
-    for i in 0..12 {
-        let s_prime_i = s_prime ^ GOLAY_B[i];
+    for (i, &bi) in GOLAY_B.iter().enumerate() {
+        let s_prime_i = s_prime ^ bi;
         if weight12(s_prime_i) <= 2 {
             let error_pattern = ((s_prime_i as u32) << 12) | (1 << (11 - i));
             let corrected = received ^ error_pattern;
@@ -118,7 +118,7 @@ pub fn golay_encode(data: &[u8]) -> Vec<u8> {
     // No, 12 bits -> 24 bits. So 2 bytes of input -> 1 codeword (if we ignore 4 bits) or 3 bytes -> 2 codewords.
     // Let's go with 3 bytes -> 2 codewords (3 bytes each) = 6 bytes.
 
-    let mut encoded = Vec::with_capacity((data.len() + 2) / 3 * 6);
+    let mut encoded = Vec::with_capacity(data.len().div_ceil(3) * 6);
     let mut i = 0;
     while i < data.len() {
         let b1 = data[i];
@@ -142,7 +142,7 @@ pub fn golay_encode(data: &[u8]) -> Vec<u8> {
 }
 
 pub fn golay_decode(data: &[u8]) -> Result<(Vec<u8>, usize), CodecError> {
-    if data.len() % 6 != 0 {
+    if !data.len().is_multiple_of(6) {
         return Err(CodecError::InsufficientData(Some(
             "Invalid Golay data length: must be multiple of 6 bytes (2 codewords)".to_string(),
         )));
@@ -193,12 +193,8 @@ impl Golay {
     }
 }
 
-impl Encoding for Golay {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for Golay {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             res.push(Bytes::from(golay_encode(&chunk)));

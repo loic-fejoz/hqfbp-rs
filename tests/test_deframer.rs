@@ -149,14 +149,14 @@ fn test_deframer_announcement_and_crc() {
     deframer.receive_bytes(&pdus[0]); // Announcement
     deframer.receive_bytes(&pdus[1]); // Data
 
-    let mut found = false;
+    let mut msg_ev = None;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.starts_with(data));
-            found = true;
+            msg_ev = Some(me);
         }
     }
-    assert!(found);
+    let me = msg_ev.expect("Message expected");
+    assert!(me.payload.starts_with(data));
 }
 
 #[test]
@@ -206,14 +206,14 @@ fn test_deframer_heuristic_gzip_header() {
     deframer.receive_bytes(&pdus[0]); // Announcement
     deframer.receive_bytes(&pdus[1]); // Data (heuristic)
 
-    let mut found = false;
+    let mut msg_ev = None;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.starts_with(data));
-            found = true;
+            msg_ev = Some(me);
         }
     }
-    assert!(found);
+    let me = msg_ev.expect("Message expected");
+    assert!(me.payload.starts_with(data));
 }
 
 #[test]
@@ -237,14 +237,14 @@ fn test_deframer_heuristic_multi_encodings() {
     deframer.receive_bytes(&pdus[0]);
     deframer.receive_bytes(&pdus[1]);
 
-    let mut found = false;
+    let mut msg_ev = None;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.starts_with(data));
-            found = true;
+            msg_ev = Some(me);
         }
     }
-    assert!(found);
+    let me = msg_ev.expect("Message expected");
+    assert!(me.payload.starts_with(data));
 }
 
 #[test]

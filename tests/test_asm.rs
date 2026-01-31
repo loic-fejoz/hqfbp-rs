@@ -48,13 +48,14 @@ fn test_asm_roundtrip() {
 
     let msg_ev = events
         .iter()
-        .find_map(|ev| {
+        .filter_map(|ev| {
             if let Event::Message(m) = ev {
                 Some(m)
             } else {
                 None
             }
         })
+        .last()
         .expect("No MessageEvent found");
 
     assert_eq!(msg_ev.payload.as_ref(), data);

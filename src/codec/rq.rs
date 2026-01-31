@@ -1,5 +1,5 @@
 use crate::ContentEncoding;
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use bytes::Bytes;
 use raptorq::Encoder as RQEncoder;
@@ -94,12 +94,8 @@ pub fn rq_decode(
     Err(CodecError::InsufficientData(None))
 }
 
-impl Encoding for RaptorQ {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        _ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for RaptorQ {
+    fn encode(&self, data: Vec<Bytes>, _ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             res.extend(rq_encode(
@@ -122,12 +118,8 @@ impl Encoding for RaptorQ {
     }
 }
 
-impl Encoding for RaptorQDynamic {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for RaptorQDynamic {
+    fn encode(&self, data: Vec<Bytes>, ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             let rq_len = chunk.len();
@@ -151,12 +143,8 @@ impl Encoding for RaptorQDynamic {
     }
 }
 
-impl Encoding for RaptorQDynamicPercent {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for RaptorQDynamicPercent {
+    fn encode(&self, data: Vec<Bytes>, ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let mut res = Vec::new();
         for chunk in data {
             let rq_len = chunk.len();

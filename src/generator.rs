@@ -13,7 +13,7 @@ pub struct PDUGenerator {
     last_min_header_size: usize,
     last_max_header_size: usize,
     last_total_header_size: usize,
-    encoding_factory: crate::codec::EncodingFactory,
+    encoding_factory: crate::codec::CodecFactory,
 }
 
 impl PDUGenerator {
@@ -46,7 +46,7 @@ impl PDUGenerator {
             last_min_header_size: 0,
             last_max_header_size: 0,
             last_total_header_size: 0,
-            encoding_factory: crate::codec::EncodingFactory::new(),
+            encoding_factory: crate::codec::CodecFactory::new(),
         }
     }
 
@@ -67,14 +67,16 @@ impl PDUGenerator {
     pub fn resolve_encodings(&self) -> Vec<ContentEncoding> {
         let mut encs = self.encodings.clone();
 
-        let has_boundary = encs.iter().any(|e| matches!(e, ContentEncoding::H));
+        let has_boundary = encs
+            .iter()
+            .any(|e| self.encoding_factory.get_encoding(e).is_header());
         if !has_boundary {
             encs.push(ContentEncoding::H);
         }
 
         let boundary_idx = encs
             .iter()
-            .position(|e| matches!(e, ContentEncoding::H))
+            .position(|e| self.encoding_factory.get_encoding(e).is_header())
             .unwrap();
         let pre = &encs[..boundary_idx];
 
@@ -108,7 +110,7 @@ impl PDUGenerator {
         let data_orig_id = self.next_msg_id;
 
         // Initialize Context
-        let mut ctx = EncodingContext {
+        let mut ctx = CodecContext {
             src_callsign: self.src_callsign.clone(),
             dst_callsign: self.dst_callsign.clone(),
             next_msg_id: self.next_msg_id,

@@ -1,9 +1,15 @@
-use crate::codec::{Encoding, EncodingContext};
+use crate::codec::{Codec, CodecContext};
 use crate::error::CodecError;
 use crate::{EncodingList, Header, pack};
 use bytes::Bytes;
 
 pub struct H;
+
+impl Default for H {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl H {
     pub fn new() -> Self {
@@ -11,12 +17,8 @@ impl H {
     }
 }
 
-impl Encoding for H {
-    fn encode(
-        &self,
-        data: Vec<Bytes>,
-        ctx: &mut EncodingContext,
-    ) -> Result<Vec<Bytes>, CodecError> {
+impl Codec for H {
+    fn encode(&self, data: Vec<Bytes>, ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError> {
         let total_chunks = data.len() as u32;
         let mut new_chunks = Vec::new();
         let data_orig_id = ctx.next_msg_id;
@@ -80,5 +82,13 @@ impl Encoding for H {
 
     fn is_chunking(&self) -> bool {
         true
+    }
+
+    fn is_header(&self) -> bool {
+        true
+    }
+
+    fn unpack_header(&self, data: Bytes) -> Result<(crate::Header, Bytes), CodecError> {
+        crate::unpack(data).map_err(|e| CodecError::FecFailure(e.to_string()))
     }
 }
