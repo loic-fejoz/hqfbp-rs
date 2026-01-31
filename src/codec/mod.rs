@@ -1,6 +1,7 @@
 use crate::error::{CodecError, Result};
 use crate::{ContentEncoding, MediaType};
 use bytes::Bytes;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -23,6 +24,7 @@ pub mod rq;
 pub mod rs;
 pub mod scr;
 
+#[derive(Debug, Clone)]
 pub struct CodecContext {
     pub src_callsign: Option<String>,
     pub dst_callsign: Option<String>,
@@ -32,6 +34,7 @@ pub struct CodecContext {
     pub last_max_header_size: usize,
     pub last_total_header_size: usize,
     pub file_size: Option<u64>,
+    pub payload_size: Option<u64>,
     pub media_type: Option<MediaType>,
     pub encodings: Vec<ContentEncoding>,
     pub announcement_mode: bool,
@@ -49,6 +52,7 @@ impl Default for CodecContext {
             last_max_header_size: 0,
             last_total_header_size: 0,
             file_size: None,
+            payload_size: None,
             media_type: None,
             encodings: Vec::new(),
             announcement_mode: false,
@@ -57,11 +61,46 @@ impl Default for CodecContext {
     }
 }
 
+impl From<&crate::Header> for CodecContext {
+    fn from(h: &crate::Header) -> Self {
+        Self {
+            src_callsign: h.src_callsign.clone(),
+            dst_callsign: h.dst_callsign.clone(),
+            next_msg_id: h.message_id.unwrap_or(0), // Or logical logic
+            original_message_id: h.original_message_id,
+            // Header doesn't have min/max header size, keep defaults or track?
+            last_min_header_size: usize::MAX,
+            last_max_header_size: 0,
+            last_total_header_size: 0,
+            file_size: h.file_size,
+            payload_size: None, // Do NOT propagate payload_size from header (chunk size). PostAsm can set it.
+            media_type: h.media_type(),
+            encodings: h
+                .content_encoding
+                .as_ref()
+                .map(|l| l.0.clone())
+                .unwrap_or_default(),
+            announcement_mode: false, // Infer from media type?
+            current_index: h.chunk_id.unwrap_or(0) as usize,
+        }
+    }
+}
+
 pub trait Codec: Send + Sync {
     fn encode(&self, data: Vec<Bytes>, ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError>;
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError>;
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(Cow<'a, CodecContext>, Bytes)>, f32), CodecError>;
+
     fn decode(&self, chunks: Vec<Bytes>) -> Result<Vec<Bytes>, CodecError> {
-        self.try_decode(chunks).map(|(res, _)| res)
+        let ctx = CodecContext::default();
+        let input = chunks
+            .into_iter()
+            .map(|b| (Cow::Owned(ctx.clone()), b))
+            .collect();
+        self.try_decode(input)
+            .map(|(res, _)| res.into_iter().map(|(_, b)| b).collect())
     }
     fn is_chunking(&self) -> bool {
         false

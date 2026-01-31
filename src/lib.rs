@@ -800,6 +800,23 @@ pub fn unpack(data: Bytes) -> Result<(Header, Bytes)> {
     Ok((header, payload))
 }
 
+impl Header {
+    pub fn apply_context(&mut self, ctx: &crate::codec::CodecContext) {
+        if let Some(fs) = ctx.file_size {
+            self.file_size = Some(fs);
+        }
+        if let Some(ps) = ctx.payload_size {
+            self.payload_size = Some(ps);
+        }
+        if self.src_callsign.is_none() {
+            self.src_callsign = ctx.src_callsign.clone();
+        }
+        if self.dst_callsign.is_none() {
+            self.dst_callsign = ctx.dst_callsign.clone();
+        }
+    }
+}
+
 pub fn hqfbp_cbor_keys() -> &'static HashMap<&'static str, u8> {
     static MAP: OnceLock<HashMap<&'static str, u8>> = OnceLock::new();
     MAP.get_or_init(|| {

@@ -21,7 +21,10 @@ impl Codec for Identity {
         Ok(data)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         Ok((chunks, 1.0))
     }
 }

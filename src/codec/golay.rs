@@ -202,12 +202,15 @@ impl Codec for Golay {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
         let mut quality = 0.0;
-        for chunk in chunks {
+        for (ctx, chunk) in chunks {
             let (d, corrected) = golay_decode(&chunk)?;
-            res.push(Bytes::from(d));
+            res.push((ctx, Bytes::from(d)));
             quality += corrected as f32;
         }
         Ok((res, quality))

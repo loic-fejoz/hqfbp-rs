@@ -72,12 +72,20 @@ impl Codec for H {
         Ok(new_chunks)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
-        let mut joined = Vec::new();
-        for b in &chunks {
-            joined.extend_from_slice(b);
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
+        if chunks.is_empty() {
+            return Ok((Vec::new(), 1.0));
         }
-        Ok((vec![Bytes::from(joined)], 1.0))
+        // Take the context of the first chunk
+        let ctx = chunks[0].0.clone();
+        let mut joined = Vec::new();
+        for (_, b) in chunks {
+            joined.extend_from_slice(&b);
+        }
+        Ok((vec![(ctx, Bytes::from(joined))], 1.0))
     }
 
     fn is_chunking(&self) -> bool {

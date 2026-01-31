@@ -23,11 +23,14 @@ impl Codec for Asm {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
-        for data in chunks {
+        for (ctx, data) in chunks {
             if data.starts_with(&self.sync_word) {
-                res.push(data.slice(self.sync_word.len()..));
+                res.push((ctx, data.slice(self.sync_word.len()..)));
             } else {
                 return Err(CodecError::FecFailure(format!(
                     "ASM sync word mismatch: expected {}",

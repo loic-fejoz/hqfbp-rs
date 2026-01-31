@@ -34,9 +34,12 @@ impl Codec for Crc32 {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
-        for data in chunks {
+        for (ctx, data) in chunks {
             let mut valid_len = None;
             if data.len() >= 4 {
                 let payload = data.slice(..data.len() - 4);
@@ -67,7 +70,7 @@ impl Codec for Crc32 {
             }
 
             if let Some(vl) = valid_len {
-                res.push(data.slice(..vl));
+                res.push((ctx, data.slice(..vl)));
             } else {
                 return Err(CodecError::CrcMismatch);
             }

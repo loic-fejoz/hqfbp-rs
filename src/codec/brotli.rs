@@ -48,10 +48,13 @@ impl Codec for Brotli {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
-        for chunk in chunks {
-            res.push(Bytes::from(brotli_decompress(&chunk)?));
+        for (ctx, chunk) in chunks {
+            res.push((ctx, Bytes::from(brotli_decompress(&chunk)?)));
         }
         Ok((res, 1.0))
     }

@@ -23,7 +23,10 @@ impl Codec for Repeat {
         Ok(next_chunks)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
         if chunks.len() > 1 && self.count > 0 {
             let step = self.count;

@@ -80,11 +80,16 @@ impl Codec for Ax25 {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
-        for c in chunks {
-            let (_, data) = self.unpack_header(c)?;
-            res.push(data);
+        for (mut ctx, c) in chunks {
+            let (h, data) = self.unpack_header(c)?;
+            // Update context with header info
+            *ctx.to_mut() = CodecContext::from(&h);
+            res.push((ctx, data));
         }
         Ok((res, 1000.0))
     }

@@ -108,9 +108,17 @@ impl Codec for RaptorQ {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
-        let res = rq_decode(chunks, self.original_count, self.mtu)?;
-        Ok((vec![Bytes::from(res)], 10.0))
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
+        if chunks.is_empty() {
+            return Ok((Vec::new(), 0.0));
+        }
+        let ctx = chunks[0].0.clone();
+        let inputs: Vec<Bytes> = chunks.into_iter().map(|(_, b)| b).collect();
+        let res = rq_decode(inputs, self.original_count, self.mtu)?;
+        Ok((vec![(ctx, Bytes::from(res))], 10.0))
     }
 
     fn is_chunking(&self) -> bool {
@@ -132,10 +140,18 @@ impl Codec for RaptorQDynamic {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
-        let total_len: usize = chunks.iter().map(|b| b.len()).sum();
-        let res = rq_decode(chunks, total_len, self.mtu)?;
-        Ok((vec![Bytes::from(res)], 10.0))
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
+        if chunks.is_empty() {
+            return Ok((Vec::new(), 0.0));
+        }
+        let ctx = chunks[0].0.clone();
+        let total_len: usize = chunks.iter().map(|(_, b)| b.len()).sum();
+        let inputs: Vec<Bytes> = chunks.into_iter().map(|(_, b)| b).collect();
+        let res = rq_decode(inputs, total_len, self.mtu)?;
+        Ok((vec![(ctx, Bytes::from(res))], 10.0))
     }
 
     fn is_chunking(&self) -> bool {
@@ -160,10 +176,18 @@ impl Codec for RaptorQDynamicPercent {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
-        let total_len: usize = chunks.iter().map(|b| b.len()).sum();
-        let res = rq_decode(chunks, total_len, self.mtu)?;
-        Ok((vec![Bytes::from(res)], 10.0))
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
+        if chunks.is_empty() {
+            return Ok((Vec::new(), 0.0));
+        }
+        let ctx = chunks[0].0.clone();
+        let total_len: usize = chunks.iter().map(|(_, b)| b.len()).sum();
+        let inputs: Vec<Bytes> = chunks.into_iter().map(|(_, b)| b).collect();
+        let res = rq_decode(inputs, total_len, self.mtu)?;
+        Ok((vec![(ctx, Bytes::from(res))], 10.0))
     }
 
     fn is_chunking(&self) -> bool {

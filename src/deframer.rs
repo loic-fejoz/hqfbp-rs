@@ -146,6 +146,7 @@ impl Deframer {
             to_apply_rev.reverse();
 
             self.apply_decodings(current_payload, &to_apply_rev, Some(header), false)
+                .map(|(b, q, _ctx)| (b, q))
         } else {
             Ok((current_payload, 0))
         }
@@ -185,7 +186,7 @@ impl Deframer {
                 }
 
                 match self.apply_decodings(b_data.clone(), &post, Some(h_peek), false) {
-                    Ok((clean_pdu, q)) => {
+                    Ok((clean_pdu, q, _ctx)) => {
                         if let Some(b) = &boundary
                             && let Ok((mut h2, mut p2)) = self
                                 .encoding_factory
@@ -207,6 +208,8 @@ impl Deframer {
 
                             if match_ok {
                                 self.strip_post_boundary_encodings(&mut h2);
+                                // Update header with context from decoding (e.g. PostAsm length)
+                                h2.apply_context(&_ctx);
                                 if let Ok((p3, q_gain)) =
                                     self.apply_pdu_level_decodings(&mut h2, p2.clone())
                                 {
@@ -238,7 +241,7 @@ impl Deframer {
                 }
 
                 let mut single_success = false;
-                if let Ok((clean_pdu, q)) =
+                if let Ok((clean_pdu, q, _ctx)) =
                     self.apply_decodings_multi(vec![b_data.clone()], &post, None, false)
                     && let Some(b) = &boundary
                     && let Ok((mut h2, mut p2)) = self
@@ -263,6 +266,7 @@ impl Deframer {
                         single_success = false;
                     } else {
                         self.strip_post_boundary_encodings(&mut h2);
+                        h2.apply_context(&_ctx);
                         if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&mut h2, p2) {
                             let src_c = h2.src_callsign.clone();
                             let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
@@ -305,7 +309,8 @@ impl Deframer {
                 let mut try_list = self.not_yet_decoded.clone();
                 try_list.push(b_data.clone());
                 let _try_list_len = try_list.len();
-                if let Ok((clean_pdu, q)) = self.apply_decodings_multi(try_list, &post, None, false)
+                if let Ok((clean_pdu, q, _ctx)) =
+                    self.apply_decodings_multi(try_list, &post, None, false)
                     && let Some(b) = &boundary
                     && let Ok((mut h2, mut p2)) = self
                         .encoding_factory
@@ -321,6 +326,7 @@ impl Deframer {
                         }
                     }
                     self.strip_post_boundary_encodings(&mut h2);
+                    h2.apply_context(&_ctx);
                     if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&mut h2, p2) {
                         let src_c = h2.src_callsign.clone();
                         let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
@@ -369,7 +375,7 @@ impl Deframer {
         encodings: &[ContentEncoding],
         header: Option<&Header>,
         header_already_unpacked: bool,
-    ) -> Result<(Bytes, usize)> {
+    ) -> Result<(Bytes, usize, crate::codec::CodecContext)> {
         self.apply_decodings_multi(vec![data], encodings, header, header_already_unpacked)
     }
 
@@ -377,10 +383,21 @@ impl Deframer {
         &self,
         input: Vec<Bytes>,
         encs: &[ContentEncoding],
-        _header: Option<&Header>,
+        header: Option<&Header>,
         _header_already_unpacked: bool,
-    ) -> Result<(Bytes, usize)> {
-        let mut current = input;
+    ) -> Result<(Bytes, usize, crate::codec::CodecContext)> {
+        // Initialize context
+        let initial_ctx = if let Some(h) = header {
+            crate::codec::CodecContext::from(h)
+        } else {
+            crate::codec::CodecContext::default()
+        };
+
+        let mut current: Vec<(std::borrow::Cow<'_, crate::codec::CodecContext>, Bytes)> = input
+            .into_iter()
+            .map(|b| (std::borrow::Cow::Owned(initial_ctx.clone()), b))
+            .collect();
+
         let mut quality = 0.0;
 
         for enc_enum in encs.iter().rev() {
@@ -391,7 +408,13 @@ impl Deframer {
         }
 
         let mut final_data = Vec::new();
-        for b in current {
+        let final_ctx = if let Some(first) = current.first() {
+            first.0.clone().into_owned()
+        } else {
+            initial_ctx
+        };
+
+        for (_, b) in current {
             final_data.extend_from_slice(&b);
         }
         if final_data.is_empty() {
@@ -399,7 +422,7 @@ impl Deframer {
                 "Empty data after multi-decoding".to_string(),
             ));
         }
-        Ok((Bytes::from(final_data), quality as usize))
+        Ok((Bytes::from(final_data), quality as usize, final_ctx))
     }
 
     fn process_pdu(&mut self, header: Header, payload: Bytes, quality: usize) {
@@ -529,7 +552,7 @@ impl Deframer {
         let pre_fixed = pre.clone();
 
         let data = match self.apply_decodings_multi(segments, &pre_fixed, Some(&merged), false) {
-            Ok((d, _)) => d,
+            Ok((d, _, _)) => d,
             Err(_e) => {
                 return false;
             }
@@ -580,7 +603,7 @@ impl Deframer {
         let data_clone = data.clone();
         let (pre_inner, _, boundary_inner) = split_at_boundary(&self.encoding_factory, &inner_ce);
 
-        if let Ok((p_inner, _)) =
+        if let Ok((p_inner, _, _)) =
             self.apply_decodings(data.clone(), &pre_inner, Some(&merged), false)
             && let Some(b_inner) = boundary_inner
             && let Ok((_h_inner, _)) = self

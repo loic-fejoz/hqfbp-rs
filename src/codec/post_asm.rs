@@ -23,11 +23,26 @@ impl Codec for PostAsm {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
-        for data in chunks {
-            if data.ends_with(&self.sync_word) {
-                res.push(data.slice(..data.len() - self.sync_word.len()));
+        for (mut ctx, data) in chunks {
+            // Reverse search for the sync word
+            let found_pos = data
+                .windows(self.sync_word.len())
+                .rposition(|window| window == self.sync_word);
+
+            if let Some(pos) = found_pos {
+                // Determine the end of the payload (start of sync word)
+                // We truncate everything after 'pos' including sync word and potential garbage
+                let payload = data.slice(0..pos);
+
+                // Update context
+                ctx.to_mut().payload_size = Some(payload.len() as u64);
+
+                res.push((ctx, payload));
             } else {
                 return Err(CodecError::FecFailure(format!(
                     "Post-ASM sync word mismatch: expected {}",

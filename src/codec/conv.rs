@@ -205,14 +205,17 @@ impl Codec for Conv {
         Ok(res)
     }
 
-    fn try_decode(&self, chunks: Vec<Bytes>) -> Result<(Vec<Bytes>, f32), CodecError> {
+    fn try_decode<'a>(
+        &self,
+        chunks: Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>,
+    ) -> Result<(Vec<(std::borrow::Cow<'a, CodecContext>, Bytes)>, f32), CodecError> {
         let mut res = Vec::new();
         let mut quality = 0.0;
-        for chunk in chunks {
+        for (ctx, chunk) in chunks {
             let (d, metric) = conv_decode(&chunk, self.k, &self.rate)?;
             let d_bytes = Bytes::from(d);
             quality += (d_bytes.len() * 8).saturating_sub(metric) as f32;
-            res.push(d_bytes);
+            res.push((ctx, d_bytes));
         }
         Ok((res, quality))
     }

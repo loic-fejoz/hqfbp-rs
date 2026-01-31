@@ -12,7 +12,7 @@ Key features include:
 - **File Broadcasting**: Efficient for one-to-many transmissions.
 - **Chunking**: Mandatory support for large file split into smaller PDUs.
 
-For more details, refer to the [HQFBP RFC](https://github.com/loic-fejoz/hqfbp/blob/main/rfc.md) ([local version](../hqfbp/rfc.md)).
+For more details, refer to the [HQFBP RFC](https://github.com/loic-fejoz/hqfbp/blob/main/RFC.md) ([local version](../hqfbp/RFC.md)).
 
 ## Installation
 
