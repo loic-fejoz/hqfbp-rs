@@ -43,3 +43,36 @@ impl Codec for Repeat {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_repeat_encode() {
+        let codec = Repeat::new(3);
+        let mut ctx = CodecContext::default();
+        let data = vec![Bytes::from("abc")];
+        let res = codec.encode(data, &mut ctx).unwrap();
+        assert_eq!(res.len(), 3);
+        assert_eq!(res[0], Bytes::from("abc"));
+        assert_eq!(res[1], Bytes::from("abc"));
+        assert_eq!(res[2], Bytes::from("abc"));
+    }
+
+    #[test]
+    fn test_repeat_decode() {
+        let codec = Repeat::new(3);
+        let ctx = CodecContext::default();
+        let data = vec![
+            (Cow::Owned(ctx.clone()), Bytes::from("abc")),
+            (Cow::Owned(ctx.clone()), Bytes::from("abc")),
+            (Cow::Owned(ctx), Bytes::from("abc")),
+        ];
+        let (res, _) = codec.try_decode(data).unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].1, Bytes::from("abc"));
+    }
+}

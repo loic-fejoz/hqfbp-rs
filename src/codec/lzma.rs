@@ -51,3 +51,26 @@ impl Codec for Lzma {
         Ok((res, 1.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_lzma_encode_decode() {
+        let codec = Lzma::new();
+        let mut ctx = CodecContext::default();
+        let payload = b"LZMA/XZ compression test. Longer strings compress better.";
+        let data = vec![Bytes::from(payload.as_slice())];
+
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+        assert_eq!(encoded.len(), 1);
+
+        let decode_input = vec![(Cow::Owned(ctx.clone()), encoded[0].clone())];
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from(payload.as_slice()));
+    }
+}

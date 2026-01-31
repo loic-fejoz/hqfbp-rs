@@ -88,3 +88,39 @@ impl Codec for Crc16 {
         Ok((res, 1000.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_crc16_encode_decode() {
+        let codec = Crc16::new();
+        let mut ctx = CodecContext::default();
+        let data = vec![Bytes::from("123456789")];
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+
+        assert_eq!(encoded.len(), 1);
+        // "123456789" (9 bytes) + 2 bytes CRC = 11 bytes
+        assert_eq!(encoded[0].len(), 11);
+
+        // Decode
+        let decode_input = vec![(Cow::Owned(ctx.clone()), encoded[0].clone())];
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from("123456789"));
+    }
+
+    #[test]
+    fn test_crc16_decode_failure() {
+        let codec = Crc16::new();
+        let ctx = CodecContext::default();
+        // Invalid CRC
+        let data = vec![Bytes::from(vec![1, 2, 3, 4, 0, 0])];
+        let decode_input = vec![(Cow::Owned(ctx), data[0].clone())];
+        let res = codec.try_decode(decode_input);
+        assert!(res.is_err());
+    }
+}

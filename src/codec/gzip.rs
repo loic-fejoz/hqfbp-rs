@@ -59,3 +59,29 @@ impl Codec for Gzip {
         Ok((res, 1.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_gzip_encode_decode() {
+        let codec = Gzip::new();
+        let mut ctx = CodecContext::default();
+        let payload = b"Hello, world! This is a test string to compress.";
+        let data = vec![Bytes::from(payload.as_slice())];
+
+        // Encode
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+        assert_eq!(encoded.len(), 1);
+        assert_ne!(encoded[0].as_ref(), payload); // Should be different (compressed or wrapped)
+
+        // Decode
+        let decode_input = vec![(Cow::Owned(ctx.clone()), encoded[0].clone())];
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from(payload.as_slice()));
+    }
+}

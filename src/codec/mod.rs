@@ -24,6 +24,8 @@ pub mod rq;
 pub mod rs;
 pub mod scr;
 
+pub type DecodedChunks<'a> = Vec<(Cow<'a, CodecContext>, Bytes)>;
+
 #[derive(Debug, Clone)]
 pub struct CodecContext {
     pub src_callsign: Option<String>,
@@ -90,8 +92,8 @@ pub trait Codec: Send + Sync {
     fn encode(&self, data: Vec<Bytes>, ctx: &mut CodecContext) -> Result<Vec<Bytes>, CodecError>;
     fn try_decode<'a>(
         &self,
-        chunks: Vec<(Cow<'a, CodecContext>, Bytes)>,
-    ) -> Result<(Vec<(Cow<'a, CodecContext>, Bytes)>, f32), CodecError>;
+        chunks: DecodedChunks<'a>,
+    ) -> Result<(DecodedChunks<'a>, f32), CodecError>;
 
     fn decode(&self, chunks: Vec<Bytes>) -> Result<Vec<Bytes>, CodecError> {
         let ctx = CodecContext::default();

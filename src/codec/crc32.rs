@@ -78,3 +78,28 @@ impl Codec for Crc32 {
         Ok((res, 1000.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_crc32_encode_decode() {
+        let codec = Crc32::new();
+        let mut ctx = CodecContext::default();
+        let data = vec![Bytes::from("123456789")];
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+
+        assert_eq!(encoded.len(), 1);
+        // "123456789" (9 bytes) + 4 bytes CRC = 13 bytes
+        assert_eq!(encoded[0].len(), 13);
+
+        // Decode
+        let decode_input = vec![(Cow::Owned(ctx.clone()), encoded[0].clone())];
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from("123456789"));
+    }
+}

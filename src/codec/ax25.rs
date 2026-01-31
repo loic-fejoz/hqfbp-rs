@@ -139,3 +139,42 @@ impl Codec for Ax25 {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_ax25_encode_decode() {
+        let codec = Ax25::new();
+        let mut ctx = CodecContext::default();
+        ctx.src_callsign = Some("MYCALL".to_string());
+        ctx.dst_callsign = Some("URCALL".to_string());
+
+        let payload = b"Hello AX.25";
+        let data = vec![Bytes::from(payload.as_slice())];
+
+        // Encode
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+        assert_eq!(encoded.len(), 1);
+        // Header (16 bytes) + Payload
+        assert_eq!(encoded[0].len(), 16 + payload.len());
+
+        // Decode
+        // Context for decode doesn't need to match encode context initially,
+        // as Ax25 unpack logic extracts info from header.
+        let decode_ctx = CodecContext::default();
+        let decode_input = vec![(Cow::Owned(decode_ctx.clone()), encoded[0].clone())];
+
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from(payload.as_slice()));
+
+        // Verify context update from header
+        let res_ctx = &decoded[0].0;
+        assert_eq!(res_ctx.src_callsign.as_deref(), Some("MYCALL"));
+        assert_eq!(res_ctx.dst_callsign.as_deref(), Some("URCALL"));
+    }
+}

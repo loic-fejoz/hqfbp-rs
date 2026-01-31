@@ -73,3 +73,33 @@ impl Codec for Scrambler {
         Ok((res, 1.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_scrambler_encode_decode() {
+        // Use a simple poly. 0x3 = 11.
+        let poly = 0x3;
+        let seed = Some(0x1);
+        let codec = Scrambler::new(poly, seed);
+
+        let mut ctx = CodecContext::default();
+        let payload = vec![0xAA, 0x55, 0x00, 0xFF];
+        let data = vec![Bytes::from(payload.clone())];
+
+        // Encode (XOR scrambling)
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+        assert_eq!(encoded.len(), 1);
+        assert_ne!(encoded[0].as_ref(), &payload);
+
+        // Decode (XOR again with same params should recover)
+        let decode_input = vec![(Cow::Owned(ctx.clone()), encoded[0].clone())];
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from(payload));
+    }
+}

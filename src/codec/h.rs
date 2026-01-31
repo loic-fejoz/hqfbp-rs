@@ -100,3 +100,43 @@ impl Codec for H {
         crate::unpack(data).map_err(|e| CodecError::FecFailure(e.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_h_encode_decode() {
+        let codec = H::new();
+        let mut ctx = CodecContext::default();
+        ctx.file_size = Some(12345);
+
+        let data = vec![Bytes::from("payload")];
+        // H encode wraps payload in Header
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+        assert_eq!(encoded.len(), 1);
+        assert!(encoded[0].len() > "payload".len());
+
+        // H decode strips header?
+        // Wait, H::try_decode in h.rs simply joins chunks and returns logical context?
+        // Let's verify h.rs content...
+        // try_decode joins data. It does NOT strip header because H codec is usually *outside*
+        // the payload processing for 'try_decode' in the sense of 'applying' the header logic
+        // to context? No, wait.
+        // H implementation of try_decode:
+        // "Take the context of the first chunk... Ok((vec![(ctx, Bytes::from(joined))], 1.0))"
+        // It basically just passes through?
+        // Ah, H usually implies the data IS the header + payload.
+        // If we just decode it, we might get the payload back if the context extraction happened elsewhere?
+        // Actually, Deframer handles H specially (unpack_header).
+        // Standard code `decode` might not do much?
+
+        let decode_input = vec![(Cow::Owned(ctx.clone()), encoded[0].clone())];
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+        assert_eq!(decoded.len(), 1);
+        // It just joins.
+        assert_eq!(decoded[0].1, encoded[0]);
+    }
+}

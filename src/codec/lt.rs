@@ -491,4 +491,29 @@ mod tests {
         assert_eq!(decoder.k, 0);
         assert!(decoder.get_result().is_some());
     }
+
+    #[test]
+    fn test_lt_encode_decode() {
+        use crate::codec::{Codec, CodecContext, lt::LT};
+        use bytes::Bytes;
+        use std::borrow::Cow;
+
+        let codec = LT::new(10, 64, 20); // 10 bytes payload, 64 MTU, 20 packets
+        let mut ctx = CodecContext::default();
+        let payload = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+        let data = vec![Bytes::from(payload.clone())];
+
+        let encoded = codec.encode(data.clone(), &mut ctx).unwrap();
+        assert!(!encoded.is_empty());
+
+        // Decode
+        let decode_input: Vec<_> = encoded
+            .iter()
+            .map(|b| (Cow::Owned(ctx.clone()), b.clone()))
+            .collect();
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from(payload));
+    }
 }

@@ -53,3 +53,30 @@ impl Codec for PostAsm {
         Ok((res, 1000.0))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecContext;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_post_asm_decode() {
+        let sync = vec![0xCA, 0xFE];
+        let codec = PostAsm::new(sync.clone());
+        let ctx = CodecContext::default();
+
+        let payload = vec![1, 2, 3, 4];
+        let mut data = payload.clone();
+        data.extend_from_slice(&sync);
+        data.push(0x99);
+
+        let decode_input = vec![(Cow::Owned(ctx.clone()), Bytes::from(data))];
+        let (decoded, _) = codec.try_decode(decode_input).unwrap();
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].1, Bytes::from(payload));
+
+        assert_eq!(decoded[0].0.payload_size, Some(4));
+    }
+}
