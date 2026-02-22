@@ -10,7 +10,7 @@ PY_PACK = src/hqfbp/pack.py
 PY_UNPACK = src/hqfbp/unpack.py
 PYTHON_UV = cd ../py-hqfbp && uv run python3
 
-.PHONY: all clean test-tcp-rust test-tcp-py test-cross-tcp test-py-bench
+.PHONY: all clean test-tcp-rust test-tcp-py test-cross-tcp test-py-bench explore-2 explore-3 explore-4 explore-5 explore-6
 
 all: test-tcp-rust test-tcp-py test-cross-tcp test-py-bench
 
@@ -111,3 +111,21 @@ simulate-lt-pre-2:
 	    --ber 0.0001 \
 	    --encodings "lt(dlen,156,30),h,rs(255,223)" \
 	    --ann-encodings "h,crc32,repeat(3)"
+
+explore-2: explore-2.txt
+	python3 visual_explore.py --file $^ --port 8050 --n-thread 2 --limit 5000 --file-size 1024 --ber 0.001 --step 100
+
+explore-5-small: explore-5.txt
+	python3 visual_explore.py --file $^ --port 8050 --n-thread 2 --limit 5000 --file-size 256 --ber 0.001 --step 10
+
+explore-5-big: explore-5.txt
+	python3 visual_explore.py --file $^ --port 8050 --n-thread 2 --limit 5000 --file-size 50000 --ber 0.001 --step 4096
+
+explore-6-small: explore-6.txt
+	python3 visual_explore.py --file $^ --port 8050 --n-thread 2 --limit 5000 --file-size 256 --ber 0.001 --step 10
+
+explore-6-big: explore-6.txt
+	python3 visual_explore.py --file $^ --port 8050 --n-thread 2 --limit 5000 --file-size 50000 --ber 0.001 --step 4096
+
+%.explore: %.txt
+	python3 visual_explore.py --file $^ --port 8050 --n-thread 2 --limit 5000 --file-size 1024 --ber 0.001 --step 100
