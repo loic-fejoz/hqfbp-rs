@@ -8,14 +8,19 @@ use std::sync::OnceLock;
 pub mod codec;
 pub mod deframer;
 pub mod generator;
+pub mod kiss;
 
+/// Represents media/content type either via a numeric CoAP Content-Format ID or a string MIME type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaType {
+    /// Numeric CoAP content format identifier (e.g. 0 for text/plain, 60 for application/cbor)
     Format(u16),
+    /// Standard MIME content type string
     Type(String),
 }
 
 impl MediaType {
+    /// Returns the string MIME representation of the media type.
     pub fn to_mime(&self) -> String {
         match self {
             MediaType::Format(id) => rev_coap_content_formats()
@@ -26,6 +31,7 @@ impl MediaType {
         }
     }
 
+    /// Converts known MIME types into their standardized numeric CoAP Content-Format IDs.
     pub fn canonicalize(self) -> Self {
         match self {
             MediaType::Type(s) => {
@@ -46,6 +52,7 @@ impl std::fmt::Display for MediaType {
     }
 }
 
+/// HQFBP packet/message header metadata encoded via CBOR.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Header {
     pub message_id: Option<u32>,
@@ -63,52 +70,45 @@ pub struct Header {
     pub payload_size: Option<u64>,
 }
 
+fn decode_header_field<'b, C>(
+    d: &mut Decoder<'b>,
+    h: &mut Header,
+    key: u32,
+    _ctx: &mut C,
+) -> Result<(), minicbor::decode::Error> {
+    match key {
+        0 => h.message_id = Some(d.u32()?),
+        1 => h.src_callsign = Some(d.str()?.to_string()),
+        2 => h.dst_callsign = Some(d.str()?.to_string()),
+        3 => h.content_format = Some(d.u16()?),
+        4 => h.content_type = Some(d.str()?.to_string()),
+        5 => h.content_encoding = Some(d.decode()?),
+        6 => h.repr_digest = Some(d.bytes()?.to_vec()),
+        7 => h.content_digest = Some(d.bytes()?.to_vec()),
+        8 => h.file_size = Some(d.u64()?),
+        9 => h.chunk_id = Some(d.u32()?),
+        10 => h.original_message_id = Some(d.u32()?),
+        11 => h.total_chunks = Some(d.u32()?),
+        12 => h.payload_size = Some(d.u64()?),
+        _ => {
+            d.skip()?;
+        }
+    }
+    Ok(())
+}
+
 impl<'b, C> Decode<'b, C> for Header {
-    fn decode(d: &mut Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
+    fn decode(d: &mut Decoder<'b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
         let mut h = Header::default();
         if let Some(len) = d.map()? {
             for _ in 0..len {
                 let key = d.u32()?;
-                match key {
-                    0 => h.message_id = Some(d.u32()?),
-                    1 => h.src_callsign = Some(d.str()?.to_string()),
-                    2 => h.dst_callsign = Some(d.str()?.to_string()),
-                    3 => h.content_format = Some(d.u16()?),
-                    4 => h.content_type = Some(d.str()?.to_string()),
-                    5 => h.content_encoding = Some(d.decode()?),
-                    6 => h.repr_digest = Some(d.bytes()?.to_vec()),
-                    7 => h.content_digest = Some(d.bytes()?.to_vec()),
-                    8 => h.file_size = Some(d.u64()?),
-                    9 => h.chunk_id = Some(d.u32()?),
-                    10 => h.original_message_id = Some(d.u32()?),
-                    11 => h.total_chunks = Some(d.u32()?),
-                    12 => h.payload_size = Some(d.u64()?),
-                    _ => {
-                        d.skip()?;
-                    }
-                }
+                decode_header_field(d, &mut h, key, ctx)?;
             }
         } else {
             while d.datatype()? != minicbor::data::Type::Break {
                 let key = d.u32()?;
-                match key {
-                    0 => h.message_id = Some(d.u32()?),
-                    1 => h.src_callsign = Some(d.str()?.to_string()),
-                    2 => h.dst_callsign = Some(d.str()?.to_string()),
-                    3 => h.content_format = Some(d.u16()?),
-                    4 => h.content_type = Some(d.str()?.to_string()),
-                    5 => h.content_encoding = Some(d.decode()?),
-                    6 => h.repr_digest = Some(d.bytes()?.to_vec()),
-                    7 => h.content_digest = Some(d.bytes()?.to_vec()),
-                    8 => h.file_size = Some(d.u64()?),
-                    9 => h.chunk_id = Some(d.u32()?),
-                    10 => h.original_message_id = Some(d.u32()?),
-                    11 => h.total_chunks = Some(d.u32()?),
-                    12 => h.payload_size = Some(d.u64()?),
-                    _ => {
-                        d.skip()?;
-                    }
-                }
+                decode_header_field(d, &mut h, key, ctx)?;
             }
             d.skip()?;
         }
@@ -364,26 +364,50 @@ fn get_repeat_re() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"repeat\((\d+)\)").unwrap())
 }
 
+/// Content encoding variants supported by HQFBP.
+///
+/// Transformations prior to the boundary sentinel (`ContentEncoding::H`) are applied to the full
+/// message stream (e.g. gzip compression), whereas transformations after `H` are applied per-PDU
+/// (e.g. Reed-Solomon, CRC, Scrambler).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ContentEncoding {
+    /// Boundary marker separating message-level encodings from PDU-level encodings
     H,
+    /// No transformation applied
     Identity,
+    /// Gzip stream compression
     Gzip,
+    /// Deflate stream compression
     Deflate,
+    /// Brotli stream compression
     Brotli,
+    /// LZMA/XZ stream compression
     Lzma,
+    /// 16-bit CCITT CRC checksum appended to data
     Crc16,
+    /// 32-bit ISO HDLC CRC checksum appended to data
     Crc32,
+    /// Systematic Reed-Solomon (n, k) Forward Error Correction
     ReedSolomon(usize, usize),
+    /// RaptorQ Fountain Code with explicit source length, MTU, and repair symbols
     RaptorQ(usize, u16, u32),
+    /// RaptorQ with dynamic source length derived from chunk payload size
     RaptorQDynamic(u16, u32),
+    /// Luby Transform (LT) Fountain Code with explicit source length, MTU, and repair symbols
     LT(usize, u16, u32),
+    /// Luby Transform (LT) with dynamic source length
     LTDynamic(u16, u32),
+    /// Convolutional code (constraint length k, rate string like "1/2")
     Conv(usize, String),
+    /// Linear feedback shift register (LFSR) additive scrambler / whitening filter
     Scrambler(u64),
+    /// Chunking split boundary with max chunk payload size
     Chunk(usize),
+    /// PDU repeat / duplication count for reliability
     Repeat(usize),
+    /// Unrecognized string encoding variant preserved for forward compatibility
     OtherString(String),
+    /// Unrecognized integer encoding variant preserved for forward compatibility
     OtherInteger(i8),
 }
 
@@ -536,6 +560,7 @@ impl From<ContentEncoding> for i8 {
     }
 }
 
+/// A list of `ContentEncoding` entries serialized as a CBOR array, string, or compact integer.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EncodingList(pub Vec<ContentEncoding>);
 
@@ -650,6 +675,7 @@ pub fn get_coap_id(mimetype: &str) -> Option<u16> {
     coap_content_formats().get(mimetype).copied()
 }
 
+/// Packs an HQFBP header and payload slice into a CBOR-serialized byte stream.
 pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
     let mut h = header.clone();
 
@@ -685,6 +711,7 @@ pub fn pack(header: &Header, payload: &[u8]) -> Result<Bytes> {
     Ok(Bytes::from(buf))
 }
 
+/// Unpacks a CBOR-serialized byte stream into an HQFBP `Header` and the remaining payload bytes.
 pub fn unpack(data: Bytes) -> Result<(Header, Bytes)> {
     let mut decoder = Decoder::new(&data);
     let header: Header = match decoder.decode() {
@@ -802,17 +829,44 @@ pub fn rev_encoding_registry() -> &'static HashMap<&'static str, i8> {
     })
 }
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+/// Parses a comma-separated list of encoding strings (e.g. "gzip,h,crc32", "rs(255,223),scr(0x21)").
+/// Correctly accounts for parentheses in nested encoding parameter lists.
+pub fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
+    let mut results = Vec::new();
+    let mut current = String::new();
+    let mut depth: i32 = 0;
+
+    for c in s.chars() {
+        if c == ',' && depth == 0 {
+            let trimmed = current.trim();
+            if !trimmed.is_empty() {
+                results.push(parse_single_enc(trimmed));
+                current.clear();
+            }
+        } else {
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth = depth.saturating_sub(1);
+            }
+            current.push(c);
+        }
+    }
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        results.push(parse_single_enc(trimmed));
+    }
+    results
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn parse_single_enc(s: &str) -> ContentEncoding {
+    ContentEncoding::try_from(s).unwrap_or_else(|_| ContentEncoding::OtherString(s.to_string()))
+}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+impl std::str::FromStr for EncodingList {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(EncodingList(parse_encodings(s)))
     }
 }

@@ -48,6 +48,23 @@ fn split_encs(encs: &[ContentEncoding]) -> (Vec<ContentEncoding>, Vec<ContentEnc
     }
 }
 
+fn is_splitting_encoding(e: &ContentEncoding) -> bool {
+    matches!(
+        e,
+        ContentEncoding::Chunk(_)
+            | ContentEncoding::Repeat(_)
+            | ContentEncoding::RaptorQ(_, _, _)
+            | ContentEncoding::ReedSolomon(_, _)
+            | ContentEncoding::LT(_, _, _)
+    )
+}
+
+fn find_last_splitting_index(encs: &[ContentEncoding]) -> Option<usize> {
+    encs.iter().rposition(is_splitting_encoding)
+}
+
+const MAX_NOT_YET_DECODED: usize = 256;
+
 impl Default for Deframer {
     fn default() -> Self {
         Self::new()
@@ -84,19 +101,9 @@ impl Deframer {
         let is_fragmented =
             header.total_chunks.unwrap_or(1) > 1 || header.chunk_id.unwrap_or(0) > 0;
 
-        let mut lsi = -1;
-        for (i, e) in pre.iter().enumerate() {
-            if matches!(
-                e,
-                ContentEncoding::Chunk(_)
-                    | ContentEncoding::Repeat(_)
-                    | ContentEncoding::RaptorQ(_, _, _)
-                    | ContentEncoding::ReedSolomon(_, _)
-                    | ContentEncoding::LT(_, _, _)
-            ) {
-                lsi = i as i32;
-            }
-        }
+        let mut lsi = find_last_splitting_index(&pre)
+            .map(|idx| idx as i32)
+            .unwrap_or(-1);
 
         // If implicitly fragmented (Chunk hidden), assume all pre encodings are session-level
         // unless explicitly handled above.
@@ -128,7 +135,6 @@ impl Deframer {
         let mut header: Option<Header> = None;
         let mut payload: Option<Bytes> = None;
         let mut pdu_quality = 0;
-        let mut _decoded_pdu_level = false;
 
         // 1. Phase 1: Recovery and PDU-level decoding
         let peek_unpack = unpack(b_data.clone());
@@ -159,7 +165,7 @@ impl Deframer {
                                 == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string()))
                                 || h2.media_type() == Some(MediaType::Format(60));
                             if is_ann {
-                                // eprintln!("DEBUG: Phase 1 decoded Announcement!");
+                                log::debug!("Phase 1 decoded Announcement!");
                             }
 
                             if let Ok((p3, q_gain)) =
@@ -168,16 +174,15 @@ impl Deframer {
                                 header = Some(h2);
                                 payload = Some(p3);
                                 pdu_quality = q + q_gain;
-                                _decoded_pdu_level = true;
                             }
                         }
                     }
-                    Err(_e) => {
+                    Err(e) => {
                         let is_ann = h_peek.media_type()
                             == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string()))
                             || h_peek.media_type() == Some(MediaType::Format(60));
                         if is_ann {
-                            // eprintln!("DEBUG: Phase 1 Announcement failed: {e}");
+                            log::debug!("Phase 1 Announcement failed: {e}");
                         }
                     }
                 }
@@ -185,7 +190,6 @@ impl Deframer {
                 // No encodings known, use the peeked result as-is
                 header = Some(h_peek.clone());
                 payload = Some(p_peek.clone());
-                _decoded_pdu_level = true;
             }
         }
 
@@ -257,44 +261,41 @@ impl Deframer {
                 let mut try_list = self.not_yet_decoded.clone();
                 try_list.push(b_data.clone());
                 match self.apply_decodings_multi(try_list, &post, None, false) {
-                    Ok((clean_pdu, q)) => {
-                        match unpack(clean_pdu) {
-                            Ok((mut h2, p2)) => {
-                                self.strip_post_h_encodings(&mut h2);
-                                if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
-                                    let src_c = h2.src_callsign.clone();
-                                    let orig_id =
-                                        h2.original_message_id.or(h2.message_id).unwrap_or(0);
-                                    let session_key = (src_c, orig_id);
-                                    let chunk_id = h2.chunk_id.unwrap_or(0);
-                                    let new_quality = q + q_gain;
+                    Ok((clean_pdu, q)) => match unpack(clean_pdu) {
+                        Ok((mut h2, p2)) => {
+                            self.strip_post_h_encodings(&mut h2);
+                            if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
+                                let src_c = h2.src_callsign.clone();
+                                let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
+                                let session_key = (src_c, orig_id);
+                                let chunk_id = h2.chunk_id.unwrap_or(0);
+                                let new_quality = q + q_gain;
 
-                                    let already_had_better =
-                                        if let Some(s) = self.sessions.get(&session_key) {
-                                            if let Some(existing) = s.chunks.get(&chunk_id) {
-                                                existing.1 >= new_quality
-                                            } else {
-                                                false
-                                            }
+                                let already_had_better =
+                                    if let Some(s) = self.sessions.get(&session_key) {
+                                        if let Some(existing) = s.chunks.get(&chunk_id) {
+                                            existing.1 >= new_quality
                                         } else {
                                             false
-                                        };
+                                        }
+                                    } else {
+                                        false
+                                    };
 
-                                    self.process_pdu(h2, p3, new_quality);
-                                    reclaimed_any = true;
-                                    if !already_had_better {
-                                        self.not_yet_decoded = Vec::new();
-                                    }
+                                self.process_pdu(h2, p3, new_quality);
+                                reclaimed_any = true;
+                                if !already_had_better {
+                                    self.not_yet_decoded = Vec::new();
                                 }
                             }
-                            Err(_e) => {
-                                // eprintln!("DEBUG: unpack failed: {e}");
-                            }
                         }
-                    }
-                    Err(_e) => {
+                        Err(e) => {
+                            log::debug!("unpack failed: {e}");
+                        }
+                    },
+                    Err(e) => {
                         if !post.is_empty() {
-                            // eprintln!("DEBUG: Phase 2 apply_decodings_multi fail: {:?}", e);
+                            log::debug!("Phase 2 apply_decodings_multi fail: {e:?}");
                         }
                     }
                 }
@@ -304,12 +305,17 @@ impl Deframer {
             }
 
             if !reclaimed_any {
+                if self.not_yet_decoded.len() >= MAX_NOT_YET_DECODED {
+                    self.not_yet_decoded.remove(0);
+                }
                 self.not_yet_decoded.push(b_data);
             }
             return;
         }
 
-        self.process_pdu(header.unwrap(), payload.unwrap(), pdu_quality);
+        if let (Some(h), Some(p)) = (header, payload) {
+            self.process_pdu(h, p, pdu_quality);
+        }
     }
 
     fn apply_decodings_multi(
@@ -439,12 +445,22 @@ impl Deframer {
             payload: payload.clone(),
         }));
 
-        let orig_id = header.original_message_id.or(header.message_id).unwrap();
+        let Some(orig_id) = header.original_message_id.or(header.message_id) else {
+            log::warn!("PDU missing both original_message_id and message_id; dropping");
+            return;
+        };
         let session_key = (src_callsign.clone(), orig_id);
         let total_chunks = header.total_chunks.unwrap_or(1);
         let chunk_id = header.chunk_id.unwrap_or(0);
 
-        // eprintln!("DEBUG: apply_pdu mid={:?}, ce={:?}, total={}, chunk={}, p_len={}", header.message_id, header.content_encoding, total_chunks, chunk_id, payload.len());
+        log::debug!(
+            "apply_pdu mid={:?}, ce={:?}, total={}, chunk={}, p_len={}",
+            header.message_id,
+            header.content_encoding,
+            total_chunks,
+            chunk_id,
+            payload.len()
+        );
 
         let session = self
             .sessions
@@ -455,8 +471,11 @@ impl Deframer {
                 total_chunks,
             });
 
-        let existing = session.chunks.get(&chunk_id);
-        if existing.is_none() || pdu_quality > existing.unwrap().1 {
+        if session
+            .chunks
+            .get(&chunk_id)
+            .is_none_or(|e| pdu_quality > e.1)
+        {
             session.chunks.insert(chunk_id, (payload, pdu_quality));
             session.headers.push(header);
         }
@@ -642,33 +661,14 @@ impl Deframer {
         // Calculate Last Splitting Index (lsi) to identify which encodings were PDU-level
         // and thus already handled in Phase 1 (apply_pdu_level_decodings).
         // We must NOT re-apply these.
-        let mut lsi = -1;
-        for (i, e) in pre.iter().enumerate() {
-            if matches!(
-                e,
-                ContentEncoding::Chunk(_)
-                    | ContentEncoding::Repeat(_)
-                    | ContentEncoding::RaptorQ(_, _, _)
-                    | ContentEncoding::ReedSolomon(_, _)
-                    | ContentEncoding::LT(_, _, _)
-            ) {
-                lsi = i as i32;
-            }
-        }
+        let lsi = find_last_splitting_index(&pre)
+            .map(|idx| idx as i32)
+            .unwrap_or(-1);
 
         // If implicit chunking (Chunk hidden) and no packet-based encodings (RQ/RS/Repeat),
         // we must join segments before applying stream encodings (gzip/etc).
         // Similar to apply_pdu_level_decodings logic.
-        let has_packet_enc = pre_fixed.iter().any(|e| {
-            matches!(
-                e,
-                ContentEncoding::Chunk(_)
-                    | ContentEncoding::Repeat(_)
-                    | ContentEncoding::RaptorQ(_, _, _)
-                    | ContentEncoding::ReedSolomon(_, _)
-                    | ContentEncoding::LT(_, _, _)
-            )
-        });
+        let has_packet_enc = pre_fixed.iter().any(is_splitting_encoding);
 
         if !has_packet_enc && !segments.is_empty() {
             let is_frag = merged.total_chunks.unwrap_or(1) > 1 || merged.chunk_id.unwrap_or(0) > 0;
@@ -685,11 +685,6 @@ impl Deframer {
                 pre_fixed.truncate((lsi + 1) as usize);
             }
         } else {
-            // lsi == -1 but has_packet_enc is TRUE?
-            // Should not happen as lsi logic matches has_packet_enc logic.
-            // Unless encodings definition differs?
-            // But if so, we fall through here.
-            // Replicate the check just in case.
             let is_frag = merged.total_chunks.unwrap_or(1) > 1 || merged.chunk_id.unwrap_or(0) > 0;
             if !is_frag && segments.len() == 1 {
                 pre_fixed.clear();
@@ -700,8 +695,8 @@ impl Deframer {
         let mut data = match self.apply_decodings_multi(segments, &pre_fixed, Some(&merged), false)
         {
             Ok((d, _)) => d,
-            Err(_e) => {
-                // eprintln!("DEBUG: complete_message apply_decodings_multi failed: {e}");
+            Err(e) => {
+                log::debug!("complete_message apply_decodings_multi failed: {e}");
                 return;
             }
         };

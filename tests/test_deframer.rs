@@ -152,7 +152,7 @@ fn test_deframer_announcement_and_crc() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.starts_with(data));
+            assert_eq!(me.payload.as_ref(), data);
             found = true;
         }
     }
@@ -209,7 +209,7 @@ fn test_deframer_heuristic_gzip_header() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.starts_with(data));
+            assert_eq!(me.payload.as_ref(), data);
             found = true;
         }
     }
@@ -240,7 +240,7 @@ fn test_deframer_heuristic_multi_encodings() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.starts_with(data));
+            assert_eq!(me.payload.as_ref(), data);
             found = true;
         }
     }

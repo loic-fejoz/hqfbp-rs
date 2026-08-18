@@ -2,7 +2,12 @@
 name = "hqfbp-rs"
 version = "0.1.0"
 edition = "2024"
-authors=["Loïc Fejoz <loic@fejoz.net>"]
+authors = ["Loïc Fejoz <loic@fejoz.net>"]
+description = "Rust implementation of the Hamradio Quick File Broadcasting Protocol (HQFBP)"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/loic-fejoz/hqfbp-rs"
+keywords = ["hamradio", "broadcast", "fec", "cbor", "kiss"]
 
 [dependencies]
 minicbor = { version = "0.26", features = ["derive", "alloc"] }
@@ -37,6 +42,6 @@ harness = false
 
 [profile.release]
 codegen-units = 1
-debug = true
-strip = true
+debug = true       # Keep debug symbols for profiling with perf/flamegraph
+strip = false
 lto = true

@@ -73,7 +73,7 @@ fn test_generator_deframer_rq_post_boundary() {
     let mut found = false;
     while let Some(ev) = deframer.next_event() {
         if let Event::Message(me) = ev {
-            assert!(me.payload.as_ref().starts_with(data));
+            assert_eq!(me.payload.as_ref(), data);
             found = true;
         }
     }

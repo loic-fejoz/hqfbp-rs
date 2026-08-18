@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 use clap::{Parser, ValueEnum};
-use hqfbp_rs::ContentEncoding;
 use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::generator::PDUGenerator;
+use hqfbp_rs::parse_encodings;
 use rand::{Rng, RngCore};
 
 #[derive(Parser, Debug)]
@@ -234,37 +234,6 @@ impl SimulationMetrics {
             }
         }
     }
-}
-
-fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
-    let mut results = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0;
-
-    for c in s.chars() {
-        if c == ',' && depth == 0 {
-            if !current.is_empty() {
-                results.push(parse_single_enc(&current));
-                current.clear();
-            }
-        } else {
-            if c == '(' {
-                depth += 1;
-            }
-            if c == ')' {
-                depth -= 1;
-            }
-            current.push(c);
-        }
-    }
-    if !current.is_empty() {
-        results.push(parse_single_enc(&current));
-    }
-    results
-}
-
-fn parse_single_enc(s: &str) -> ContentEncoding {
-    ContentEncoding::try_from(s).unwrap_or(ContentEncoding::OtherString(s.to_string()))
 }
 
 fn main() -> Result<()> {

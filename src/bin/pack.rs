@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use hqfbp_rs::generator::PDUGenerator;
-use hqfbp_rs::{ContentEncoding, MediaType};
+use hqfbp_rs::kiss::encode_kiss_frame;
+use hqfbp_rs::{MediaType, parse_encodings};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -44,63 +45,6 @@ struct Args {
     tcp: Option<String>,
 }
 
-const FEND: u8 = 0xC0;
-const FESC: u8 = 0xDB;
-const TFEND: u8 = 0xDC;
-const TFESC: u8 = 0xDD;
-
-fn encode_kiss_frame(pdu: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::new();
-    frame.push(FEND);
-    frame.push(0x00); // Command Byte: Data frame, Port 0
-
-    for &byte in pdu {
-        if byte == FEND {
-            frame.push(FESC);
-            frame.push(TFEND);
-        } else if byte == FESC {
-            frame.push(FESC);
-            frame.push(TFESC);
-        } else {
-            frame.push(byte);
-        }
-    }
-
-    frame.push(FEND);
-    frame
-}
-
-fn parse_encodings(s: &str) -> Vec<ContentEncoding> {
-    let mut results = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0;
-
-    for c in s.chars() {
-        if c == ',' && depth == 0 {
-            if !current.is_empty() {
-                results.push(parse_single_enc(&current));
-                current.clear();
-            }
-        } else {
-            if c == '(' {
-                depth += 1;
-            }
-            if c == ')' {
-                depth -= 1;
-            }
-            current.push(c);
-        }
-    }
-    if !current.is_empty() {
-        results.push(parse_single_enc(&current));
-    }
-    results
-}
-
-fn parse_single_enc(s: &str) -> ContentEncoding {
-    ContentEncoding::try_from(s).unwrap_or(ContentEncoding::OtherString(s.to_string()))
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -115,8 +59,8 @@ fn main() -> Result<()> {
         .format_timestamp(None)
         .init();
 
-    let encodings = args.encodings.as_ref().map(|s| parse_encodings(s));
-    let ann_encodings = args.ann_encodings.as_ref().map(|s| parse_encodings(s));
+    let encodings = args.encodings.as_deref().map(parse_encodings);
+    let ann_encodings = args.ann_encodings.as_deref().map(parse_encodings);
 
     let mut f = File::open(&args.filepath).context("Failed to open input file")?;
     let mut data = Vec::new();
@@ -139,13 +83,13 @@ fn main() -> Result<()> {
     let pdus = generator.generate(&data, Some(MediaType::Type(content_type)))?;
 
     let mut out: Box<dyn Write> = if let Some(addr) = args.tcp {
-        println!("Connecting to KISS-over-TCP server at {addr}...");
+        log::info!("Connecting to KISS-over-TCP server at {addr}...");
         Box::new(TcpStream::connect(addr).context("Failed to connect to TCP server")?)
     } else {
         let output_path = args
             .output
             .unwrap_or_else(|| format!("{}.kiss", args.filepath));
-        println!("Writing to KISS file {output_path}...");
+        log::info!("Writing to KISS file {output_path}...");
         Box::new(File::create(&output_path).context("Failed to create output file")?)
     };
 
@@ -156,6 +100,6 @@ fn main() -> Result<()> {
         count += 1;
     }
 
-    println!("Successfully sent/packed {count} frames.");
+    log::info!("Successfully sent/packed {count} frames.");
     Ok(())
 }

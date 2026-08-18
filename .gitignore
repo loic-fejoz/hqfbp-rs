@@ -22,3 +22,15 @@ target
 
 outputs/
 test_out_rs/
+unpacked_output_*/
+
+# Profiling and performance logs
+perf.data*
+perf_report*.txt
+explore_*.log
+simulation_results*.log
+clippy_errors.txt
+sample_rust.txt
+test_tcp.kiss
+*.kiss
+test_payload_*.bin
