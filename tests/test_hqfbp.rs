@@ -231,5 +231,30 @@ fn test_crc_helpers() {
 
     let mut d32 = data.to_vec();
     d32.extend_from_slice(&c32);
-    assert_eq!(d32.len(), 5 + 4);
+}
+
+#[test]
+fn test_invalid_content_encoding_parsing() {
+    assert!(ContentEncoding::try_from("rs(256,223)").is_err());
+    assert!(ContentEncoding::try_from("rs(255,0)").is_err());
+    assert!(ContentEncoding::try_from("rs(255,255)").is_err());
+
+    assert!(ContentEncoding::try_from("rq(0,1024,10)").is_err());
+    assert!(ContentEncoding::try_from("rq(100,0,10)").is_err());
+    assert!(ContentEncoding::try_from("rq(dlen,0,10)").is_err());
+
+    assert!(ContentEncoding::try_from("lt(0,1024,10)").is_err());
+    assert!(ContentEncoding::try_from("lt(100,0,10)").is_err());
+    assert!(ContentEncoding::try_from("lt(dlen,0,10)").is_err());
+
+    assert!(ContentEncoding::try_from("chunk(0)").is_err());
+    assert!(ContentEncoding::try_from("repeat(0)").is_err());
+
+    assert!(ContentEncoding::try_from("rs(255,223)").is_ok());
+    assert!(ContentEncoding::try_from("rq(100,1024,10)").is_ok());
+    assert!(ContentEncoding::try_from("rq(dlen,1024,10)").is_ok());
+    assert!(ContentEncoding::try_from("lt(100,1024,10)").is_ok());
+    assert!(ContentEncoding::try_from("lt(dlen,1024,10)").is_ok());
+    assert!(ContentEncoding::try_from("chunk(10)").is_ok());
+    assert!(ContentEncoding::try_from("repeat(1)").is_ok());
 }

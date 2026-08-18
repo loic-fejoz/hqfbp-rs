@@ -28,6 +28,7 @@ pub struct RobustSoliton {
 
 impl RobustSoliton {
     pub fn new(k: usize) -> Self {
+        assert!(k >= 1, "k must be at least 1");
         let c = 0.1;
         let delta = 0.5;
 
@@ -99,6 +100,8 @@ pub struct LTEncoder {
 
 impl LTEncoder {
     pub fn new(mut data: Vec<u8>, symbol_size: usize) -> Self {
+        assert!(symbol_size > 0, "symbol_size must be greater than zero");
+        assert!(!data.is_empty(), "data must not be empty");
         // Pad
         if !data.len().is_multiple_of(symbol_size) {
             let pad_len = symbol_size - (data.len() % symbol_size);
@@ -172,6 +175,8 @@ pub struct LTDecoder {
 
 impl LTDecoder {
     pub fn new(total_len: usize, symbol_size: usize) -> Self {
+        assert!(symbol_size > 0, "symbol_size must be greater than zero");
+        assert!(total_len > 0, "total_len must be greater than zero");
         let k = total_len.div_ceil(symbol_size);
         let mut block_deps = HashMap::new();
         for i in 0..k {

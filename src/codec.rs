@@ -91,19 +91,14 @@ pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
     }
 
     let width = 64 - poly_mask.leading_zeros();
-    let mask = (1u64 << width) - 1;
+    let mask = u64::MAX >> (64 - width);
     let mut state = mask;
 
     let mut res = Vec::with_capacity(data.len());
     for &b in data {
         let mut out_byte = 0u8;
         for i in (0..8).rev() {
-            let mut feedback = 0u8;
-            let mut temp = state & poly_mask;
-            while temp != 0 {
-                feedback ^= (temp & 1) as u8;
-                temp >>= 1;
-            }
+            let feedback = ((state & poly_mask).count_ones() & 1) as u8;
 
             let bit = (b >> i) & 1;
             let scr_bit = bit ^ feedback;

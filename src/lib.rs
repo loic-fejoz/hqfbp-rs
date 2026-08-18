@@ -433,28 +433,49 @@ impl TryFrom<&str> for ContentEncoding {
         } else if s == "crc32" || s == "6" {
             Ok(ContentEncoding::Crc32)
         } else if let Some(m) = get_rs_re().captures(s) {
-            Ok(ContentEncoding::ReedSolomon(m[1].parse()?, m[2].parse()?))
+            let n = m[1].parse()?;
+            let k = m[2].parse()?;
+            if n > 255 || k == 0 || k >= n {
+                bail!("Invalid RS parameters: n={n}, k={k}");
+            }
+            Ok(ContentEncoding::ReedSolomon(n, k))
         } else if let Some(m) = get_rq_re().captures(s) {
-            Ok(ContentEncoding::RaptorQ(
-                m[1].parse()?,
-                m[2].parse()?,
-                m[3].parse()?,
-            ))
+            let len = m[1].parse()?;
+            let mtu = m[2].parse()?;
+            let rep = m[3].parse()?;
+            if len == 0 || mtu == 0 {
+                bail!("Invalid RaptorQ parameters: len={len}, mtu={mtu}");
+            }
+            Ok(ContentEncoding::RaptorQ(len, mtu, rep))
         } else if let Some(m) = get_rq_dyn_re().captures(s) {
-            Ok(ContentEncoding::RaptorQDynamic(
-                m[1].parse()?,
-                m[2].parse()?,
-            ))
+            let mtu = m[1].parse()?;
+            let rep = m[2].parse()?;
+            if mtu == 0 {
+                bail!("Invalid RaptorQDynamic parameters: mtu={mtu}");
+            }
+            Ok(ContentEncoding::RaptorQDynamic(mtu, rep))
         } else if let Some(m) = get_lt_re().captures(s) {
-            Ok(ContentEncoding::LT(
-                m[1].parse()?,
-                m[2].parse()?,
-                m[3].parse()?,
-            ))
+            let len = m[1].parse()?;
+            let mtu = m[2].parse()?;
+            let rep = m[3].parse()?;
+            if len == 0 || mtu == 0 {
+                bail!("Invalid LT parameters: len={len}, mtu={mtu}");
+            }
+            Ok(ContentEncoding::LT(len, mtu, rep))
         } else if let Some(m) = get_lt_dyn_re().captures(s) {
-            Ok(ContentEncoding::LTDynamic(m[1].parse()?, m[2].parse()?))
+            let mtu = m[1].parse()?;
+            let rep = m[2].parse()?;
+            if mtu == 0 {
+                bail!("Invalid LTDynamic parameters: mtu={mtu}");
+            }
+            Ok(ContentEncoding::LTDynamic(mtu, rep))
         } else if let Some(m) = get_conv_re().captures(s) {
-            Ok(ContentEncoding::Conv(m[1].parse()?, m[2].to_string()))
+            let k = m[1].parse()?;
+            let rate = m[2].to_string();
+            if k != 7 || rate != "1/2" {
+                bail!("Only conv(7, 1/2) is currently supported");
+            }
+            Ok(ContentEncoding::Conv(k, rate))
         } else if let Some(m) = get_scr_re().captures(s) {
             let ps = &m[1];
             let p = if let Some(stripped) = ps.strip_prefix("0x") {
@@ -464,9 +485,17 @@ impl TryFrom<&str> for ContentEncoding {
             };
             Ok(ContentEncoding::Scrambler(p))
         } else if let Some(m) = get_chunk_re().captures(s) {
-            Ok(ContentEncoding::Chunk(m[1].parse()?))
+            let size = m[1].parse()?;
+            if size == 0 {
+                bail!("Chunk size must be greater than zero");
+            }
+            Ok(ContentEncoding::Chunk(size))
         } else if let Some(m) = get_repeat_re().captures(s) {
-            Ok(ContentEncoding::Repeat(m[1].parse()?))
+            let count = m[1].parse()?;
+            if count == 0 {
+                bail!("Repeat count must be greater than zero");
+            }
+            Ok(ContentEncoding::Repeat(count))
         } else {
             Ok(ContentEncoding::OtherString(s.to_string()))
         }
