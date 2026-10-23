@@ -101,12 +101,24 @@ impl<'b, C> Decode<'b, C> for Header {
     fn decode(d: &mut Decoder<'b>, ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
         let mut h = Header::default();
         if let Some(len) = d.map()? {
+            if len > 32 {
+                return Err(minicbor::decode::Error::message(
+                    "Header map exceeds maximum allowed entries (32)",
+                ));
+            }
             for _ in 0..len {
                 let key = d.u32()?;
                 decode_header_field(d, &mut h, key, ctx)?;
             }
         } else {
+            let mut count = 0;
             while d.datatype()? != minicbor::data::Type::Break {
+                count += 1;
+                if count > 32 {
+                    return Err(minicbor::decode::Error::message(
+                        "Indefinite header map exceeds maximum allowed entries (32)",
+                    ));
+                }
                 let key = d.u32()?;
                 decode_header_field(d, &mut h, key, ctx)?;
             }
@@ -329,39 +341,39 @@ impl Header {
 
 fn get_rs_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"rs\((\d+),\s*(\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^rs\((\d+),\s*(\d+)\)$").unwrap())
 }
 fn get_rq_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"rq\((\d+),\s*(\d+),\s*(\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^rq\((\d+),\s*(\d+),\s*(\d+)\)$").unwrap())
 }
 fn get_rq_dyn_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"rq\(dlen,\s*(\d+),\s*(\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^rq\(dlen,\s*(\d+),\s*(\d+)\)$").unwrap())
 }
 fn get_lt_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"lt\((\d+),\s*(\d+),\s*(\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^lt\((\d+),\s*(\d+),\s*(\d+)\)$").unwrap())
 }
 fn get_lt_dyn_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"lt\(dlen,\s*(\d+),\s*(\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^lt\(dlen,\s*(\d+),\s*(\d+)\)$").unwrap())
 }
 fn get_conv_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"conv\((\d+),\s*(\d+/\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^conv\((\d+),\s*(\d+/\d+)\)$").unwrap())
 }
 fn get_scr_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"scr\((0x[0-9a-fA-F]+|\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^scr\((0x[0-9a-fA-F]+|\d+)\)$").unwrap())
 }
 fn get_chunk_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"chunk\((\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^chunk\((\d+)\)$").unwrap())
 }
 fn get_repeat_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"repeat\((\d+)\)").unwrap())
+    RE.get_or_init(|| Regex::new(r"^repeat\((\d+)\)$").unwrap())
 }
 
 /// Content encoding variants supported by HQFBP.
@@ -589,34 +601,56 @@ impl<'b, C> Decode<'b, C> for EncodingList {
             }
             minicbor::data::Type::Array => {
                 let mut v = Vec::new();
-                let len = d.array()?.unwrap_or(0);
-                for _ in 0..len {
-                    match d.datatype()? {
-                        minicbor::data::Type::U8
-                        | minicbor::data::Type::U16
-                        | minicbor::data::Type::U32
-                        | minicbor::data::Type::U64
-                        | minicbor::data::Type::I8
-                        | minicbor::data::Type::I16
-                        | minicbor::data::Type::I32
-                        | minicbor::data::Type::I64
-                        | minicbor::data::Type::Int => {
-                            let i = d.i8()?;
-                            v.push(
-                                ContentEncoding::try_from(i).map_err(|_| {
+                let decode_item =
+                    |dec: &mut Decoder<'b>,
+                     vec: &mut Vec<ContentEncoding>|
+                     -> Result<(), minicbor::decode::Error> {
+                        match dec.datatype()? {
+                            minicbor::data::Type::U8
+                            | minicbor::data::Type::U16
+                            | minicbor::data::Type::U32
+                            | minicbor::data::Type::U64
+                            | minicbor::data::Type::I8
+                            | minicbor::data::Type::I16
+                            | minicbor::data::Type::I32
+                            | minicbor::data::Type::I64
+                            | minicbor::data::Type::Int => {
+                                let i = dec.i8()?;
+                                vec.push(ContentEncoding::try_from(i).map_err(|_| {
                                     minicbor::decode::Error::message("invalid enum")
-                                })?,
-                            );
-                        }
-                        _ => {
-                            let s = d.str()?;
-                            v.push(
-                                ContentEncoding::try_from(s).map_err(|_| {
+                                })?);
+                            }
+                            _ => {
+                                let s = dec.str()?;
+                                vec.push(ContentEncoding::try_from(s).map_err(|_| {
                                     minicbor::decode::Error::message("invalid string")
-                                })?,
-                            );
+                                })?);
+                            }
                         }
+                        Ok(())
+                    };
+
+                if let Some(len) = d.array()? {
+                    if len > 32 {
+                        return Err(minicbor::decode::Error::message(
+                            "Encoding list exceeds maximum length (32)",
+                        ));
                     }
+                    for _ in 0..len {
+                        decode_item(d, &mut v)?;
+                    }
+                } else {
+                    let mut count = 0;
+                    while d.datatype()? != minicbor::data::Type::Break {
+                        count += 1;
+                        if count > 32 {
+                            return Err(minicbor::decode::Error::message(
+                                "Indefinite encoding list exceeds maximum length (32)",
+                            ));
+                        }
+                        decode_item(d, &mut v)?;
+                    }
+                    d.skip()?;
                 }
                 Ok(EncodingList(v))
             }

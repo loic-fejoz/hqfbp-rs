@@ -64,6 +64,9 @@ fn find_last_splitting_index(encs: &[ContentEncoding]) -> Option<usize> {
 }
 
 const MAX_NOT_YET_DECODED: usize = 256;
+const MAX_SESSIONS: usize = 128;
+const MAX_CHUNKS_PER_SESSION: usize = 16_384;
+const MAX_ANNOUNCEMENTS: usize = 128;
 
 impl Default for Deframer {
     fn default() -> Self {
@@ -199,7 +202,9 @@ impl Deframer {
             let mut reclaimed_any = false;
 
             for key in ann_keys {
-                let ann_encs = self.announcements.get(&key).unwrap().clone();
+                let Some(ann_encs) = self.announcements.get(&key).cloned() else {
+                    continue;
+                };
                 let (_, post, _) = split_encs(&ann_encs);
 
                 // 2a. Try decoding JUST the current packet (Per-PDU FEC)
@@ -356,10 +361,14 @@ impl Deframer {
                     }
                 }
                 ContentEncoding::RaptorQDynamic(mtu, _) => {
-                    // For Dynamic RQ in Phase 2, we estimate rq_len from total received data
-                    let total_len: usize = current.iter().map(|b| b.len()).sum();
-                    // Assuming total_len is a multiple of (mtu + overhead), but we try our best
-                    let res = rq_decode(current, total_len, *mtu)?;
+                    let rq_len = header
+                        .and_then(|h| h.payload_size.or(h.file_size))
+                        .map(|s| s as usize)
+                        .unwrap_or_else(|| current.iter().map(|b| b.len()).sum());
+                    if rq_len == 0 {
+                        bail!("RaptorQDynamic received empty symbol buffer");
+                    }
+                    let res = rq_decode(current, rq_len, *mtu)?;
                     current = vec![Bytes::from(res)];
                     quality += 10;
                 }
@@ -369,8 +378,14 @@ impl Deframer {
                     quality += 10;
                 }
                 ContentEncoding::LTDynamic(mtu, _) => {
-                    let total_len: usize = current.iter().map(|b| b.len()).sum();
-                    let res = lt_decode(current, total_len, *mtu)?;
+                    let lt_len = header
+                        .and_then(|h| h.payload_size.or(h.file_size))
+                        .map(|s| s as usize)
+                        .unwrap_or_else(|| current.iter().map(|b| b.len()).sum());
+                    if lt_len == 0 {
+                        bail!("LTDynamic received empty symbol buffer");
+                    }
+                    let res = lt_decode(current, lt_len, *mtu)?;
                     current = vec![Bytes::from(res)];
                     quality += 10;
                 }
@@ -462,6 +477,17 @@ impl Deframer {
             payload.len()
         );
 
+        if !self.sessions.contains_key(&session_key)
+            && self.sessions.len() >= MAX_SESSIONS
+            && let Some(old_key) = self.sessions.keys().next().cloned()
+        {
+            log::warn!(
+                "Deframer reached max concurrent sessions ({MAX_SESSIONS}); evicting oldest {:?}",
+                old_key
+            );
+            self.sessions.remove(&old_key);
+        }
+
         let session = self
             .sessions
             .entry(session_key.clone())
@@ -470,6 +496,16 @@ impl Deframer {
                 headers: Vec::new(),
                 total_chunks,
             });
+
+        if !session.chunks.contains_key(&chunk_id) && session.chunks.len() >= MAX_CHUNKS_PER_SESSION
+        {
+            log::warn!(
+                "Session {:?} reached max chunks ({MAX_CHUNKS_PER_SESSION}); dropping chunk {}",
+                session_key,
+                chunk_id
+            );
+            return;
+        }
 
         if session
             .chunks
@@ -522,6 +558,12 @@ impl Deframer {
         if let Ok(h) = minicbor::decode::<Header>(payload)
             && let (Some(mid), Some(ce)) = (h.message_id, h.content_encoding)
         {
+            if !self.announcements.contains_key(&(src.clone(), mid))
+                && self.announcements.len() >= MAX_ANNOUNCEMENTS
+                && let Some(old_key) = self.announcements.keys().next().cloned()
+            {
+                self.announcements.remove(&old_key);
+            }
             let ice = ce_to_list(&ce);
             self.announcements.insert((src, mid), ice);
         }
@@ -553,6 +595,7 @@ impl Deframer {
                 ContentEncoding::H => {}
                 ContentEncoding::Identity => {}
                 ContentEncoding::Gzip => data = Bytes::from(gzip_decompress(&data)?),
+                ContentEncoding::Deflate => data = Bytes::from(deflate_decompress(&data)?),
                 ContentEncoding::Brotli => data = Bytes::from(brotli_decompress(&data)?),
                 ContentEncoding::Lzma => data = Bytes::from(lzma_decompress(&data)?),
                 ContentEncoding::Crc32 => {
@@ -610,6 +653,9 @@ impl Deframer {
                 }
                 ContentEncoding::RaptorQDynamic(mtu, _) => {
                     let rq_len = data.len();
+                    if rq_len == 0 {
+                        bail!("Cannot decode RaptorQDynamic on empty payload");
+                    }
                     data = Bytes::from(rq_decode(vec![data], rq_len, *mtu)?);
                     quality += 10;
                 }
@@ -619,13 +665,14 @@ impl Deframer {
                 }
                 ContentEncoding::LTDynamic(mtu, _) => {
                     let len = data.len();
+                    if len == 0 {
+                        bail!("Cannot decode LTDynamic on empty payload");
+                    }
                     data = Bytes::from(lt_decode(vec![data], len, *mtu)?);
                     quality += 10;
                 }
                 ContentEncoding::Chunk(_) => {}
-                ContentEncoding::OtherString(_)
-                | ContentEncoding::OtherInteger(_)
-                | ContentEncoding::Deflate => {}
+                ContentEncoding::OtherString(_) | ContentEncoding::OtherInteger(_) => {}
             }
         }
         Ok((data, quality))

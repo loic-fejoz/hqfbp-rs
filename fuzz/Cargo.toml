@@ -1,0 +1,43 @@
+[package]
+name = "hqfbp-rs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1.9"
+
+[dependencies.hqfbp-rs]
+path = ".."
+
+[[bin]]
+name = "fuzz_unpack"
+path = "fuzz_targets/fuzz_unpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_kiss_decoder"
+path = "fuzz_targets/fuzz_kiss_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_deframer"
+path = "fuzz_targets/fuzz_deframer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_codecs"
+path = "fuzz_targets/fuzz_codecs.rs"
+test = false
+doc = false
+bench = false

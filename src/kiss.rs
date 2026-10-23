@@ -4,6 +4,7 @@ pub const FEND: u8 = 0xC0;
 pub const FESC: u8 = 0xDB;
 pub const TFEND: u8 = 0xDC;
 pub const TFESC: u8 = 0xDD;
+pub const MAX_KISS_FRAME_SIZE: usize = 65_536;
 
 /// Encodes a raw PDU into a KISS data frame (Port 0).
 pub fn encode_kiss_frame(pdu: &[u8]) -> Vec<u8> {
@@ -43,6 +44,15 @@ impl KissDecoder {
     /// Feeds a single byte into the decoder, returning a completed frame if available.
     pub fn process_byte(&mut self, byte: u8) -> Option<Vec<u8>> {
         if self.in_frame {
+            if self.buffer.len() >= MAX_KISS_FRAME_SIZE {
+                self.in_frame = false;
+                self.buffer.clear();
+                self.escaped = false;
+                log::warn!(
+                    "KISS frame exceeded max length ({MAX_KISS_FRAME_SIZE} bytes); frame dropped"
+                );
+                return None;
+            }
             if byte == FEND {
                 self.in_frame = false;
                 if !self.buffer.is_empty() {

@@ -57,6 +57,9 @@ impl PDUGenerator {
                 ContentEncoding::Gzip => {
                     current_data = gzip_compress(&current_data)?;
                 }
+                ContentEncoding::Deflate => {
+                    current_data = deflate_compress(&current_data)?;
+                }
                 ContentEncoding::Brotli => {
                     current_data = brotli_compress(&current_data)?;
                 }

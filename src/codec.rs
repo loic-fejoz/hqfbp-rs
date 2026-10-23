@@ -2,8 +2,8 @@ use anyhow::{Result, anyhow, bail};
 use bytes::Bytes;
 use crc::{CRC_32_ISO_HDLC, Crc};
 use flate2::Compression;
-use flate2::read::GzDecoder;
-use flate2::write::GzEncoder;
+use flate2::read::{DeflateDecoder, GzDecoder, ZlibDecoder};
+use flate2::write::{GzEncoder, ZlibEncoder};
 use raptorq::Encoder as RQEncoder;
 use reed_solomon::Decoder as RSDecoder;
 use reed_solomon::Encoder as RSEncoder;
@@ -42,6 +42,32 @@ pub fn crc32_std(data: &[u8]) -> [u8; 4] {
     crc.checksum(data).to_be_bytes()
 }
 
+pub const MAX_DECOMPRESSED_SIZE: u64 = 16 * 1024 * 1024; // 16 MiB
+
+struct BoundedWriter<W> {
+    inner: W,
+    written: u64,
+    max: u64,
+}
+
+impl<W: Write> Write for BoundedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written + buf.len() as u64 > self.max {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Decompressed payload exceeded maximum allowed size",
+            ));
+        }
+        let n = self.inner.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(data)?;
@@ -49,9 +75,34 @@ pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut decoder = GzDecoder::new(data);
+    let mut decoder = GzDecoder::new(data).take(MAX_DECOMPRESSED_SIZE + 1);
     let mut res = Vec::new();
     decoder.read_to_end(&mut res)?;
+    if res.len() as u64 > MAX_DECOMPRESSED_SIZE {
+        bail!("Gzip decompression exceeded maximum allowed size ({MAX_DECOMPRESSED_SIZE} bytes)");
+    }
+    Ok(res)
+}
+
+pub fn deflate_compress(data: &[u8]) -> Result<Vec<u8>> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data)?;
+    Ok(encoder.finish()?)
+}
+
+pub fn deflate_decompress(data: &[u8]) -> Result<Vec<u8>> {
+    let mut decoder = ZlibDecoder::new(data).take(MAX_DECOMPRESSED_SIZE + 1);
+    let mut res = Vec::new();
+    if decoder.read_to_end(&mut res).is_err() {
+        res.clear();
+        let mut raw_decoder = DeflateDecoder::new(data).take(MAX_DECOMPRESSED_SIZE + 1);
+        raw_decoder.read_to_end(&mut res)?;
+    }
+    if res.len() as u64 > MAX_DECOMPRESSED_SIZE {
+        bail!(
+            "Deflate decompression exceeded maximum allowed size ({MAX_DECOMPRESSED_SIZE} bytes)"
+        );
+    }
     Ok(res)
 }
 
@@ -66,8 +117,11 @@ pub fn brotli_compress(data: &[u8]) -> Result<Vec<u8>> {
 
 pub fn brotli_decompress(data: &[u8]) -> Result<Vec<u8>> {
     let mut res = Vec::new();
-    let mut reader = brotli::Decompressor::new(data, 4096);
+    let mut reader = brotli::Decompressor::new(data, 4096).take(MAX_DECOMPRESSED_SIZE + 1);
     reader.read_to_end(&mut res)?;
+    if res.len() as u64 > MAX_DECOMPRESSED_SIZE {
+        bail!("Brotli decompression exceeded maximum allowed size ({MAX_DECOMPRESSED_SIZE} bytes)");
+    }
     Ok(res)
 }
 
@@ -80,8 +134,13 @@ pub fn lzma_compress(data: &[u8]) -> Result<Vec<u8>> {
 
 pub fn lzma_decompress(data: &[u8]) -> Result<Vec<u8>> {
     let mut res = Vec::new();
-    lzma_rs::xz_decompress(&mut Cursor::new(data), &mut res)
-        .map_err(|e| anyhow!("XZ decompress failed: {e}"))?;
+    let mut bounded = BoundedWriter {
+        inner: &mut res,
+        written: 0,
+        max: MAX_DECOMPRESSED_SIZE,
+    };
+    lzma_rs::xz_decompress(&mut Cursor::new(data), &mut bounded)
+        .map_err(|e| anyhow!("XZ decompress failed or exceeded limit: {e}"))?;
     Ok(res)
 }
 
@@ -94,22 +153,35 @@ pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
     let mask = u64::MAX >> (64 - width);
     let mut state = mask;
 
-    let mut res = Vec::with_capacity(data.len());
-    for &b in data {
-        let mut out_byte = 0u8;
-        for i in (0..8).rev() {
-            let feedback = ((state & poly_mask).count_ones() & 1) as u8;
-
-            let bit = (b >> i) & 1;
-            let scr_bit = bit ^ feedback;
-            out_byte = (out_byte << 1) | scr_bit;
-
-            state = ((state << 1) | (feedback as u64)) & mask;
-            if state == 0 {
-                state = mask;
+    #[inline(always)]
+    fn next_byte(state: &mut u64, poly_mask: u64, mask: u64) -> u8 {
+        let mut ks = 0u8;
+        for _ in 0..8 {
+            let feedback = ((*state & poly_mask).count_ones() & 1) as u8;
+            ks = (ks << 1) | feedback;
+            *state = ((*state << 1) | (feedback as u64)) & mask;
+            if *state == 0 {
+                *state = mask;
             }
         }
-        res.push(out_byte);
+        ks
+    }
+
+    let mut res = Vec::with_capacity(data.len());
+    let mut chunks = data.chunks_exact(8);
+    for chunk in chunks.by_ref() {
+        let in_word = u64::from_le_bytes(chunk.try_into().unwrap());
+        let mut ks_word = 0u64;
+        for i in 0..8 {
+            let b = next_byte(&mut state, poly_mask, mask);
+            ks_word |= (b as u64) << (i * 8);
+        }
+        res.extend_from_slice(&(in_word ^ ks_word).to_le_bytes());
+    }
+
+    for &b in chunks.remainder() {
+        let ks = next_byte(&mut state, poly_mask, mask);
+        res.push(b ^ ks);
     }
     res
 }
@@ -121,26 +193,18 @@ pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
     let ecc_len = n - k;
     let encoder = RSEncoder::new(ecc_len);
     let mut encoded = Vec::with_capacity(data.len().div_ceil(k) * n);
+    let lib_pad = 255 - n;
+    let mut codeword_buf = [0u8; 255];
 
     for chunk in data.chunks(k) {
-        // Systematic RS: Input data preserved at the beginning.
-        // Python reedsolo appends zeros for padding: data.ljust(k, b'\0')
-        // We MUST do the same for bit-accuracy.
-        let mut block_for_lib = chunk.to_vec();
-        block_for_lib.resize(k, 0); // Appends zeros
+        // Clear the data section of codeword_buf
+        codeword_buf[lib_pad..255 - ecc_len].fill(0);
+        codeword_buf[lib_pad..lib_pad + chunk.len()].copy_from_slice(chunk);
 
-        let lib_pad = 255 - n;
-        // Match the "pre-pad to 255" strategy but keep chunk at the start.
-        let mut full_codeword_for_lib = vec![0u8; lib_pad];
-        full_codeword_for_lib.extend_from_slice(&block_for_lib);
-
-        // Systematic RS means it returns [data_part, parity]
-        let encoded_full_codeword = encoder.encode(&full_codeword_for_lib);
-
+        let encoded_full_codeword = encoder.encode(&codeword_buf[..255 - ecc_len]);
         let parity = &encoded_full_codeword[255 - ecc_len..];
 
-        // Python transmits the full 'n' bytes (including the k-len padded block)
-        encoded.extend_from_slice(&block_for_lib);
+        encoded.extend_from_slice(&codeword_buf[lib_pad..255 - ecc_len]);
         encoded.extend_from_slice(parity);
     }
     Ok(encoded)
@@ -154,6 +218,7 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
     let decoder = RSDecoder::new(ecc_len);
     let mut decoded = Vec::with_capacity(data.len().checked_div(n).unwrap_or(0) * k);
     let mut total_corrected = 0;
+    let lib_pad = 255 - n;
 
     let mut i = 0;
     while i < data.len() {
@@ -162,36 +227,18 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
         let chunk = &data[i..i + block_len];
         i += block_len;
 
-        if block_len < n {
-            // In Python-accurate mode, blocks are ALWAYS n bytes because we pad during encode.
-            // If we got a shorter block, it's either an error or we need to pad it.
-            // But if we want bit-accuracy, we should probably expect n.
-            // However, for robustness, let's treat it as a truncated block.
-        }
-
         if block_len <= ecc_len {
             bail!("RS block too short to contain parity");
         }
 
-        let lib_pad = 255 - n;
-        // In encode, we did: [lib_pad, chunk_padded_to_k]
-        // chunk here is [data_part, parity]
-        let mut full_codeword = vec![0u8; lib_pad];
-        full_codeword.extend_from_slice(chunk);
-
-        // If chunk was shorter than n, we need to pad it to n (which means padding the data part)
-        // Wait, if chunk is [data, parity] and data is shorter than k.
-        // We should have [data, pad_to_k, parity].
-        // If chunk is just [data, parity], it's ambiguous.
-        // But since we aligned encode to always produce n bytes, we expect block_len == n.
-        if full_codeword.len() < 255 {
-            let needed = 255 - full_codeword.len();
-            // We must insert the padding BEFORE the parity.
-            let parity_part = &full_codeword[full_codeword.len() - ecc_len..];
-            let mut new_fw = full_codeword[..full_codeword.len() - ecc_len].to_vec();
-            new_fw.resize(new_fw.len() + needed, 0);
-            new_fw.extend_from_slice(parity_part);
-            full_codeword = new_fw;
+        let mut full_codeword = [0u8; 255];
+        if block_len == n {
+            full_codeword[lib_pad..255].copy_from_slice(chunk);
+        } else {
+            let data_part_len = block_len - ecc_len;
+            full_codeword[lib_pad..lib_pad + data_part_len]
+                .copy_from_slice(&chunk[..data_part_len]);
+            full_codeword[255 - ecc_len..255].copy_from_slice(&chunk[data_part_len..]);
         }
 
         match decoder.correct_err_count(&full_codeword, None) {
@@ -215,6 +262,14 @@ pub fn rq_encode(
     mtu: u16,
     repair_count: u32,
 ) -> Result<Vec<Bytes>> {
+    if original_count == 0 || mtu == 0 || original_count as u64 > MAX_DECOMPRESSED_SIZE {
+        bail!("Invalid RaptorQ encoding parameters: original_count={original_count}, mtu={mtu}");
+    }
+    let k = original_count.div_ceil(mtu as usize);
+    if k > 65_536 {
+        bail!("RaptorQ symbol count k={k} exceeds maximum allowed (65536)");
+    }
+
     let mut padded_data = data.to_vec();
     padded_data.resize(original_count, 0);
 
@@ -229,6 +284,14 @@ pub fn rq_encode(
 }
 
 pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
+    if original_count == 0 || mtu == 0 || original_count as u64 > MAX_DECOMPRESSED_SIZE {
+        bail!("Invalid RaptorQ decoding parameters: original_count={original_count}, mtu={mtu}");
+    }
+    let k = original_count.div_ceil(mtu as usize);
+    if k > 65_536 {
+        bail!("RaptorQ symbol count k={k} exceeds maximum allowed (65536)");
+    }
+
     // Standard HQFBP alignment is 1-4. Python uses 1 by default often.
     // Let's try 1 for alignment.
     let oti = raptorq::ObjectTransmissionInformation::new(original_count as u64, mtu, 1, 1, 1);
@@ -267,19 +330,35 @@ pub fn lt_encode(
     mtu: u16,
     repair_count: u32,
 ) -> Result<Vec<Bytes>> {
+    if original_count == 0 || mtu == 0 || original_count as u64 > MAX_DECOMPRESSED_SIZE {
+        bail!("Invalid LT encoding parameters: original_count={original_count}, mtu={mtu}");
+    }
+    let k = original_count.div_ceil(mtu as usize);
+    if k > 65_536 {
+        bail!("LT symbol count k={k} exceeds maximum allowed (65536)");
+    }
+
     let mut padded_data = data.to_vec();
     if padded_data.len() < original_count {
         padded_data.resize(original_count, 0);
     }
 
-    let encoder = LTEncoder::new(padded_data, mtu as usize);
+    let encoder = LTEncoder::try_new(padded_data, mtu as usize)?;
     let packets = encoder.encode(repair_count as usize);
 
     Ok(packets.into_iter().map(Bytes::from).collect())
 }
 
 pub fn lt_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result<Vec<u8>> {
-    let mut decoder = LTDecoder::new(original_count, mtu as usize);
+    if original_count == 0 || mtu == 0 || original_count as u64 > MAX_DECOMPRESSED_SIZE {
+        bail!("Invalid LT decoding parameters: original_count={original_count}, mtu={mtu}");
+    }
+    let k = original_count.div_ceil(mtu as usize);
+    if k > 65_536 {
+        bail!("LT symbol count k={k} exceeds maximum allowed (65536)");
+    }
+
+    let mut decoder = LTDecoder::try_new(original_count, mtu as usize)?;
 
     for packet_bytes in packets {
         if packet_bytes.len() < 4 + (mtu as usize) {
@@ -347,67 +426,81 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
         bail!("Only conv(7, 1/2) is currently supported");
     }
 
-    let g1 = 0o133u8;
-    let g2 = 0o171u8;
-    let num_states = 1 << (k - 1);
+    const NUM_STATES: usize = 64;
+    const INF: u16 = 30000;
 
-    let mut transitions = vec![[(0usize, 0u8, 0u8); 2]; num_states];
-    for (s, rules) in transitions.iter_mut().enumerate().take(num_states) {
-        for (bit, rule) in rules.iter_mut().enumerate() {
-            let new_full_state = ((s as u8) << 1) | (bit as u8);
-            let mut p1 = 0u8;
-            let mut p2 = 0u8;
-            for i in 0..7 {
-                if (g1 >> i) & 1 != 0 {
-                    p1 ^= (new_full_state >> i) & 1;
-                }
-                if (g2 >> i) & 1 != 0 {
-                    p2 ^= (new_full_state >> i) & 1;
-                }
+    // Precompute generator outputs for each of the 128 full states (7 bits)
+    // full_state = (s << 1) | bit
+    const G1: u8 = 0o133;
+    const G2: u8 = 0o171;
+
+    let mut out_bits = [(0u8, 0u8); 128];
+    for (state, out) in out_bits.iter_mut().enumerate() {
+        let mut p1 = 0u8;
+        let mut p2 = 0u8;
+        for i in 0..7 {
+            if (G1 >> i) & 1 != 0 {
+                p1 ^= ((state >> i) & 1) as u8;
             }
-            *rule = ((new_full_state & 0x3F) as usize, p1, p2);
+            if (G2 >> i) & 1 != 0 {
+                p2 ^= ((state >> i) & 1) as u8;
+            }
         }
+        *out = (p1, p2);
     }
 
-    let mut metrics = vec![usize::MAX; num_states];
+    let num_pairs = (data.len() * 8) / 2;
+    if num_pairs == 0 {
+        return Ok((Vec::new(), 0));
+    }
+
+    let mut metrics = [INF; NUM_STATES];
     metrics[0] = 0;
-    let mut paths = vec![Vec::new(); num_states];
 
-    let mut input_bits = Vec::with_capacity(data.len() * 8);
+    // Flat table of predecessor states for traceback: num_pairs * 64
+    let mut backpointers = vec![[0u8; NUM_STATES]; num_pairs];
+
+    let mut step = 0;
     for &b in data {
-        for i in (0..8).rev() {
-            input_bits.push((b >> i) & 1);
-        }
-    }
-
-    for i in (0..input_bits.len().saturating_sub(1)).step_by(2) {
-        let r1 = input_bits[i];
-        let r2 = input_bits[i + 1];
-
-        let mut new_metrics = vec![usize::MAX; num_states];
-        let mut new_paths = vec![Vec::new(); num_states];
-
-        for s in 0..num_states {
-            if metrics[s] == usize::MAX {
-                continue;
+        for bit_idx in (0..8).step_by(2).rev() {
+            if step >= num_pairs {
+                break;
             }
+            let r1 = (b >> (bit_idx + 1)) & 1;
+            let r2 = (b >> bit_idx) & 1;
 
-            for (bit, &(next_s, p1, p2)) in transitions[s].iter().enumerate() {
-                let dist = ((r1 ^ p1) + (r2 ^ p2)) as usize;
-                let new_dist = metrics[s] + dist;
+            let mut new_metrics = [INF; NUM_STATES];
+            let bp = &mut backpointers[step];
 
-                if new_dist < new_metrics[next_s] {
-                    new_metrics[next_s] = new_dist;
-                    let mut path = paths[s].clone();
-                    path.push(bit as u8);
-                    new_paths[next_s] = path;
+            // Butterfly update over 64 states
+            for next_s in 0..NUM_STATES {
+                let s0 = next_s >> 1;
+                let s1 = s0 | 32;
+
+                let (p1_0, p2_0) = out_bits[next_s]; // full state = (s0 << 1) | bit = next_s
+                let (p1_1, p2_1) = out_bits[next_s | 64]; // full state = (s1 << 1) | bit = next_s | 64
+
+                let dist0 = ((r1 ^ p1_0) + (r2 ^ p2_0)) as u16;
+                let dist1 = ((r1 ^ p1_1) + (r2 ^ p2_1)) as u16;
+
+                let cost0 = metrics[s0].saturating_add(dist0);
+                let cost1 = metrics[s1].saturating_add(dist1);
+
+                if cost0 <= cost1 {
+                    new_metrics[next_s] = cost0;
+                    bp[next_s] = s0 as u8;
+                } else {
+                    new_metrics[next_s] = cost1;
+                    bp[next_s] = s1 as u8;
                 }
             }
+
+            metrics = new_metrics;
+            step += 1;
         }
-        metrics = new_metrics;
-        paths = new_paths;
     }
 
+    // Find best ending state
     let mut best_state = 0;
     let mut min_m = metrics[0];
     for (s, &m) in metrics.iter().enumerate() {
@@ -417,7 +510,16 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
         }
     }
 
-    let mut decoded_bits = paths[best_state].clone();
+    // Traceback
+    let mut decoded_bits = Vec::with_capacity(num_pairs);
+    let mut curr_state = best_state;
+    for t in (0..num_pairs).rev() {
+        decoded_bits.push((curr_state & 1) as u8);
+        curr_state = backpointers[t][curr_state] as usize;
+    }
+    decoded_bits.reverse();
+
+    // Strip tail bits (flush bits = 6)
     if decoded_bits.len() > 6 {
         decoded_bits.truncate(decoded_bits.len() - 6);
     } else {
@@ -425,10 +527,7 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     }
 
     let mut res = Vec::with_capacity(decoded_bits.len() / 8);
-    for chunk in decoded_bits.chunks(8) {
-        if chunk.len() < 8 {
-            break;
-        }
+    for chunk in decoded_bits.chunks_exact(8) {
         let mut byte_val = 0u8;
         for (idx, &b) in chunk.iter().enumerate() {
             byte_val |= b << (7 - idx);
@@ -436,7 +535,7 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
         res.push(byte_val);
     }
 
-    Ok((res, min_m))
+    Ok((res, min_m as usize))
 }
 
 #[cfg(test)]

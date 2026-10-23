@@ -110,16 +110,16 @@ mod tests {
                     );
                 }
                 let diff_msg = format!("DIFFS: {diffs:?}\n{mismatch_dump}");
-                std::fs::write("/tmp/test_results.txt", format!("{msg}{diff_msg}")).unwrap();
+                eprintln!("{msg}{diff_msg}");
             } else {
-                std::fs::write("/tmp/test_results.txt", msg).unwrap();
+                eprintln!("{msg}");
             }
         } else {
-            std::fs::write("/tmp/test_results.txt", msg).unwrap();
+            eprintln!("{msg}");
         }
 
         if recovered_data.is_none() {
-            panic!("FAILED TO RECOVER. See /tmp/test_results.txt");
+            panic!("FAILED TO RECOVER: {msg}");
         }
         assert_eq!(recovered_data.unwrap(), data);
     }

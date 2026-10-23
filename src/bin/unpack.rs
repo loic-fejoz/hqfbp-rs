@@ -80,10 +80,24 @@ fn main() -> Result<()> {
                     if let Event::Message(me) = ev {
                         println!();
 
-                        let callsign = me.header.src_callsign.as_deref().unwrap_or("UNKNOWN");
-                        let ext = me
+                        let raw_callsign = me.header.src_callsign.as_deref().unwrap_or("UNKNOWN");
+                        let sanitized: String = raw_callsign
+                            .chars()
+                            .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                            .take(32)
+                            .collect();
+                        let callsign = if sanitized.is_empty() {
+                            "UNKNOWN"
+                        } else {
+                            &sanitized
+                        };
+
+                        let mime_str = me
                             .header
-                            .content_type
+                            .media_type()
+                            .map(|mt| mt.to_mime())
+                            .or_else(|| me.header.content_type.clone());
+                        let ext = mime_str
                             .as_deref()
                             .and_then(|ct| {
                                 mime_guess::get_mime_extensions_str(ct)
@@ -95,6 +109,12 @@ fn main() -> Result<()> {
                         let timestamp = Utc::now().format("%Y-%m-%d-%H%M%S-UTC");
                         let filename = format!("{timestamp}-{callsign}{ext}");
                         let filepath = Path::new(&args.output).join(&filename);
+
+                        // Ensure filename didn't traverse outside output directory
+                        if filepath.parent() != Some(Path::new(&args.output)) {
+                            log::warn!("Rejected unsafe output file path: {filepath:?}");
+                            continue;
+                        }
 
                         let mut file = File::create(&filepath)?;
                         file.write_all(&me.payload)?;

@@ -27,8 +27,10 @@ pub struct RobustSoliton {
 }
 
 impl RobustSoliton {
-    pub fn new(k: usize) -> Self {
-        assert!(k >= 1, "k must be at least 1");
+    pub fn try_new(k: usize) -> anyhow::Result<Self> {
+        if k == 0 || k > 65_536 {
+            anyhow::bail!("k must be between 1 and 65536, got {k}");
+        }
         let c = 0.1;
         let delta = 0.5;
 
@@ -45,11 +47,10 @@ impl RobustSoliton {
         let limit = (k as f64 / s).round() as usize;
 
         for (d, item) in tau.iter_mut().enumerate().take(k + 1).skip(1) {
-            if d < limit - 1 {
-                // d < K/S - 1? Wait, checking Py logic: d < round(k/s) - 1
+            // Guard against underflow with saturating_sub(1)
+            if d < limit.saturating_sub(1) {
                 *item = s / (k as f64) * (1.0 / d as f64);
             } else if d == limit {
-                // d == round(k/s) CHECKME py: d == round(k/s)
                 *item = s * (s / delta).ln() / (k as f64);
             } else {
                 *item = 0.0;
@@ -71,7 +72,11 @@ impl RobustSoliton {
         }
         cdf[k + 1] = 1.0;
 
-        Self { k, cdf }
+        Ok(Self { k, cdf })
+    }
+
+    pub fn new(k: usize) -> Self {
+        Self::try_new(k).expect("Invalid k for RobustSoliton")
     }
 
     pub fn sample(&self, prng: &mut SplitMix64) -> usize {
@@ -85,8 +90,23 @@ impl RobustSoliton {
     }
 }
 
+#[inline]
 fn xor_block(dest: &mut [u8], src: &[u8]) {
-    for (d, s) in dest.iter_mut().zip(src.iter()) {
+    let len = dest.len().min(src.len());
+    let mut d_chunks = dest[..len].chunks_exact_mut(32);
+    let mut s_chunks = src[..len].chunks_exact(32);
+    for (d, s) in d_chunks.by_ref().zip(s_chunks.by_ref()) {
+        let d_arr: &mut [u8; 32] = d.try_into().unwrap();
+        let s_arr: &[u8; 32] = s.try_into().unwrap();
+        for i in 0..32 {
+            d_arr[i] ^= s_arr[i];
+        }
+    }
+    for (d, s) in d_chunks
+        .into_remainder()
+        .iter_mut()
+        .zip(s_chunks.remainder())
+    {
         *d ^= s;
     }
 }
@@ -99,9 +119,13 @@ pub struct LTEncoder {
 }
 
 impl LTEncoder {
-    pub fn new(mut data: Vec<u8>, symbol_size: usize) -> Self {
-        assert!(symbol_size > 0, "symbol_size must be greater than zero");
-        assert!(!data.is_empty(), "data must not be empty");
+    pub fn try_new(mut data: Vec<u8>, symbol_size: usize) -> anyhow::Result<Self> {
+        if symbol_size == 0 {
+            anyhow::bail!("symbol_size must be greater than zero");
+        }
+        if data.is_empty() {
+            anyhow::bail!("data must not be empty");
+        }
         // Pad
         if !data.len().is_multiple_of(symbol_size) {
             let pad_len = symbol_size - (data.len() % symbol_size);
@@ -109,17 +133,24 @@ impl LTEncoder {
         }
 
         let k = data.len() / symbol_size;
+        if k == 0 || k > 65_536 {
+            anyhow::bail!("k must be between 1 and 65536, got {k}");
+        }
         let mut blocks = Vec::with_capacity(k);
         for i in 0..k {
             blocks.push(data[i * symbol_size..(i + 1) * symbol_size].to_vec());
         }
 
-        Self {
+        Ok(Self {
             blocks,
             k,
             symbol_size,
-            dist: RobustSoliton::new(k),
-        }
+            dist: RobustSoliton::try_new(k)?,
+        })
+    }
+
+    pub fn new(data: Vec<u8>, symbol_size: usize) -> Self {
+        Self::try_new(data, symbol_size).expect("Invalid parameters for LTEncoder")
     }
 
     pub fn encode(&self, repair_count: usize) -> Vec<Vec<u8>> {
@@ -174,24 +205,35 @@ pub struct LTDecoder {
 }
 
 impl LTDecoder {
-    pub fn new(total_len: usize, symbol_size: usize) -> Self {
-        assert!(symbol_size > 0, "symbol_size must be greater than zero");
-        assert!(total_len > 0, "total_len must be greater than zero");
+    pub fn try_new(total_len: usize, symbol_size: usize) -> anyhow::Result<Self> {
+        if symbol_size == 0 {
+            anyhow::bail!("symbol_size must be greater than zero");
+        }
+        if total_len == 0 {
+            anyhow::bail!("total_len must be greater than zero");
+        }
         let k = total_len.div_ceil(symbol_size);
+        if k > 65_536 {
+            anyhow::bail!("k must be at most 65536, got {k}");
+        }
         let mut block_deps = HashMap::new();
         for i in 0..k {
             block_deps.insert(i, HashSet::new());
         }
 
-        Self {
+        Ok(Self {
             total_len,
             symbol_size,
             k,
-            dist: RobustSoliton::new(k),
+            dist: RobustSoliton::try_new(k)?,
             blocks: HashMap::new(),
             graph: HashMap::new(),
             block_deps,
-        }
+        })
+    }
+
+    pub fn new(total_len: usize, symbol_size: usize) -> Self {
+        Self::try_new(total_len, symbol_size).expect("Invalid parameters for LTDecoder")
     }
 
     pub fn decode(&mut self, packet: &[u8]) -> bool {

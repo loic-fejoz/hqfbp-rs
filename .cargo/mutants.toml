@@ -1,0 +1,17 @@
+# .cargo/mutants.toml
+examine_globs = [
+    "src/lib.rs",
+    "src/codec.rs",
+    "src/deframer.rs",
+    "src/kiss.rs",
+    "src/generator.rs",
+    "src/codec/lt.rs",
+]
+exclude_globs = [
+    "tests/**",
+    "benches/**",
+    "src/bin/**",
+    "fuzz/**",
+]
+minimum_test_timeout = 20.0
+timeout_multiplier = 2.0
