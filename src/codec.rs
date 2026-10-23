@@ -168,9 +168,9 @@ pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
     }
 
     let mut res = Vec::with_capacity(data.len());
-    let mut chunks = data.chunks_exact(8);
-    for chunk in chunks.by_ref() {
-        let in_word = u64::from_le_bytes(chunk.try_into().unwrap());
+    let (chunks, remainder) = data.as_chunks::<8>();
+    for chunk in chunks {
+        let in_word = u64::from_le_bytes(*chunk);
         let mut ks_word = 0u64;
         for i in 0..8 {
             let b = next_byte(&mut state, poly_mask, mask);
@@ -179,7 +179,7 @@ pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
         res.extend_from_slice(&(in_word ^ ks_word).to_le_bytes());
     }
 
-    for &b in chunks.remainder() {
+    for &b in remainder {
         let ks = next_byte(&mut state, poly_mask, mask);
         res.push(b ^ ks);
     }
@@ -527,7 +527,7 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
     }
 
     let mut res = Vec::with_capacity(decoded_bits.len() / 8);
-    for chunk in decoded_bits.chunks_exact(8) {
+    for chunk in decoded_bits.as_chunks::<8>().0 {
         let mut byte_val = 0u8;
         for (idx, &b) in chunk.iter().enumerate() {
             byte_val |= b << (7 - idx);

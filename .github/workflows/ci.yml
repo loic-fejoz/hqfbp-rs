@@ -34,7 +34,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Cargo Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
   test:
     name: Test
@@ -52,6 +52,8 @@ jobs:
   fuzz:
     name: Fuzzing
     runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust Nightly
@@ -67,10 +69,10 @@ jobs:
           tool: cargo-fuzz
       - name: Run Fuzz Targets
         run: |
-          cargo +nightly fuzz run fuzz_unpack -- -max_total_time=30
-          cargo +nightly fuzz run fuzz_kiss_decoder -- -max_total_time=30
-          cargo +nightly fuzz run fuzz_deframer -- -max_total_time=30
-          cargo +nightly fuzz run fuzz_codecs -- -max_total_time=30
+          cargo fuzz run fuzz_unpack -- -max_total_time=30
+          cargo fuzz run fuzz_kiss_decoder -- -max_total_time=30
+          cargo fuzz run fuzz_deframer -- -max_total_time=30
+          cargo fuzz run fuzz_codecs -- -max_total_time=30
 
   mutants:
     name: Mutation Testing

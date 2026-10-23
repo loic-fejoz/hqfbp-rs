@@ -93,20 +93,14 @@ impl RobustSoliton {
 #[inline]
 fn xor_block(dest: &mut [u8], src: &[u8]) {
     let len = dest.len().min(src.len());
-    let mut d_chunks = dest[..len].chunks_exact_mut(32);
-    let mut s_chunks = src[..len].chunks_exact(32);
-    for (d, s) in d_chunks.by_ref().zip(s_chunks.by_ref()) {
-        let d_arr: &mut [u8; 32] = d.try_into().unwrap();
-        let s_arr: &[u8; 32] = s.try_into().unwrap();
+    let (d_chunks, d_rem) = dest[..len].as_chunks_mut::<32>();
+    let (s_chunks, s_rem) = src[..len].as_chunks::<32>();
+    for (d, s) in d_chunks.iter_mut().zip(s_chunks.iter()) {
         for i in 0..32 {
-            d_arr[i] ^= s_arr[i];
+            d[i] ^= s[i];
         }
     }
-    for (d, s) in d_chunks
-        .into_remainder()
-        .iter_mut()
-        .zip(s_chunks.remainder())
-    {
+    for (d, s) in d_rem.iter_mut().zip(s_rem.iter()) {
         *d ^= s;
     }
 }
