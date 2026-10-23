@@ -333,3 +333,56 @@ impl LTDecoder {
         Some(res)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xor_block_correctness() {
+        // Test varying lengths to cover:
+        // 1. Exact 32 bytes
+        // 2. > 32 bytes with remainder
+        // 3. < 32 bytes
+        for len in [5, 32, 64, 75] {
+            let mut dest = vec![0xAA; len];
+            let src = vec![0x55; len];
+            xor_block(&mut dest, &src);
+            assert_eq!(dest, vec![0xFF; len]);
+
+            // Test non-trivial XOR
+            let mut dest2 = vec![0xF0; len];
+            let src2 = vec![0x0F; len];
+            xor_block(&mut dest2, &src2);
+            assert_eq!(dest2, vec![0xFF; len]);
+
+            // Test identical XOR giving 0
+            xor_block(&mut dest2, &vec![0xFF; len]);
+            assert_eq!(dest2, vec![0x00; len]);
+        }
+    }
+
+    #[test]
+    fn test_lt_encoder_decoder_peeling() {
+        let original_data =
+            b"This is a longer message used to test LT peeling decoder with k > 1 blocks!";
+        let symbol_size = 16;
+        let encoder = LTEncoder::new(original_data.to_vec(), symbol_size);
+        let mut decoder = LTDecoder::new(original_data.len(), symbol_size);
+
+        let packets = encoder.encode(30);
+
+        // Drop some original systematic packets (e.g. esi 0 and 2) to force repair packets and XOR peeling
+        for (esi, pkt) in packets.into_iter().enumerate() {
+            if esi == 0 || esi == 2 {
+                continue; // drop
+            }
+            decoder.decode(&pkt);
+            if decoder.get_result().is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(decoder.get_result().as_deref(), Some(&original_data[..]));
+    }
+}
