@@ -26,14 +26,15 @@ pub struct Deframer {
     events: VecDeque<Event>,
     sessions: HashMap<(Option<String>, u32), Session>,
     announcements: HashMap<(Option<String>, u32), Vec<ContentEncoding>>,
+    peer_encodings: HashMap<String, Vec<ContentEncoding>>,
     not_yet_decoded: Vec<Bytes>,
 }
 
 struct Session {
     chunks: HashMap<u32, (Bytes, usize)>, // chunk_id -> (payload, quality)
     headers: Vec<Header>,
-
     total_chunks: u32,
+    last_activity: std::time::Instant,
 }
 
 fn ce_to_list(ce: &EncodingList) -> Vec<ContentEncoding> {
@@ -80,8 +81,54 @@ impl Deframer {
             events: VecDeque::new(),
             sessions: HashMap::new(),
             announcements: HashMap::new(),
+            peer_encodings: HashMap::new(),
             not_yet_decoded: Vec::new(),
         }
+    }
+
+    /// Register default content encodings for a specific peer callsign.
+    ///
+    /// These encodings are used as a fallback when incoming packets from this peer
+    /// do not contain explicit content encoding headers or over-the-air announcements.
+    pub fn register_peer_encodings<S: Into<String>>(
+        &mut self,
+        callsign: S,
+        encodings: Vec<ContentEncoding>,
+    ) {
+        self.peer_encodings.insert(callsign.into(), encodings);
+    }
+
+    /// Unregister pre-configured encodings for a peer callsign.
+    pub fn unregister_peer_encodings(&mut self, callsign: &str) -> Option<Vec<ContentEncoding>> {
+        self.peer_encodings.remove(callsign)
+    }
+
+    /// Retrieve the registered encodings for a peer callsign, if any.
+    pub fn peer_encodings(&self, callsign: &str) -> Option<&[ContentEncoding]> {
+        self.peer_encodings.get(callsign).map(|v| v.as_slice())
+    }
+
+    /// Purge incomplete sessions that have been inactive for longer than `timeout`.
+    ///
+    /// Returns the list of expired session identifiers `(src_callsign, original_message_id)`.
+    pub fn cleanup_expired(&mut self, timeout: std::time::Duration) -> Vec<(Option<String>, u32)> {
+        let now = std::time::Instant::now();
+        let mut expired = Vec::new();
+        for (key, session) in &self.sessions {
+            if now.duration_since(session.last_activity) >= timeout {
+                expired.push(key.clone());
+            }
+        }
+        for key in &expired {
+            log::info!("Session {:?} timed out after {:?}; purging", key, timeout);
+            self.sessions.remove(key);
+        }
+        expired
+    }
+
+    /// Returns the number of active, incomplete sessions currently being tracked.
+    pub fn active_sessions_count(&self) -> usize {
+        self.sessions.len()
     }
 
     fn apply_pdu_level_decodings(&self, header: &Header, payload: Bytes) -> Result<(Bytes, usize)> {
@@ -89,6 +136,13 @@ impl Deframer {
             .content_encoding
             .as_ref()
             .map(ce_to_list)
+            .or_else(|| {
+                header
+                    .src_callsign
+                    .as_ref()
+                    .and_then(|call| self.peer_encodings.get(call))
+                    .cloned()
+            })
             .unwrap_or_default();
         let (pre, _, _has_h) = split_encs(&ce);
 
@@ -150,9 +204,19 @@ impl Deframer {
                 self.announcements
                     .get(&(src_c.clone(), mid))
                     .cloned()
+                    .or_else(|| {
+                        src_c
+                            .as_ref()
+                            .and_then(|call| self.peer_encodings.get(call))
+                            .cloned()
+                    })
                     .or_else(|| h_peek.content_encoding.as_ref().map(ce_to_list))
             } else {
-                h_peek.content_encoding.as_ref().map(ce_to_list)
+                src_c
+                    .as_ref()
+                    .and_then(|call| self.peer_encodings.get(call))
+                    .cloned()
+                    .or_else(|| h_peek.content_encoding.as_ref().map(ce_to_list))
             };
 
             if let Some(ce) = ce_list {
@@ -198,13 +262,16 @@ impl Deframer {
 
         // 2. Phase 2: Heuristic Recovery
         if header.is_none() || payload.is_none() {
-            let ann_keys: Vec<_> = self.announcements.keys().cloned().collect();
+            let mut candidate_encs: Vec<Vec<ContentEncoding>> = Vec::new();
+            for ann in self.announcements.values() {
+                candidate_encs.push(ann.clone());
+            }
+            for peer_enc in self.peer_encodings.values() {
+                candidate_encs.push(peer_enc.clone());
+            }
             let mut reclaimed_any = false;
 
-            for key in ann_keys {
-                let Some(ann_encs) = self.announcements.get(&key).cloned() else {
-                    continue;
-                };
+            for ann_encs in candidate_encs {
                 let (_, post, _) = split_encs(&ann_encs);
 
                 // 2a. Try decoding JUST the current packet (Per-PDU FEC)
@@ -495,7 +562,9 @@ impl Deframer {
                 chunks: HashMap::new(),
                 headers: Vec::new(),
                 total_chunks,
+                last_activity: std::time::Instant::now(),
             });
+        session.last_activity = std::time::Instant::now();
 
         if !session.chunks.contains_key(&chunk_id) && session.chunks.len() >= MAX_CHUNKS_PER_SESSION
         {
@@ -700,6 +769,12 @@ impl Deframer {
             .content_encoding
             .as_ref()
             .map(ce_to_list)
+            .or_else(|| {
+                key.0
+                    .as_ref()
+                    .and_then(|call| self.peer_encodings.get(call))
+                    .cloned()
+            })
             .unwrap_or_default();
         let (pre, _post, _has_h) = split_encs(&ce_list);
 

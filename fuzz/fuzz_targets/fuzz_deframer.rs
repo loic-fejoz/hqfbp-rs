@@ -10,6 +10,18 @@ fuzz_target!(|data: &[u8]| {
 
     let mut deframer = Deframer::new();
 
+    // Optionally register a peer encoding to exercise peer fallback paths
+    if data.len() > 4 && data[0] % 2 == 0 {
+        deframer.register_peer_encodings(
+            "PEER",
+            vec![
+                hqfbp_rs::ContentEncoding::Gzip,
+                hqfbp_rs::ContentEncoding::H,
+                hqfbp_rs::ContentEncoding::Crc16,
+            ],
+        );
+    }
+
     // Feed in chunks to simulate multiple sequential/interleaved PDUs
     let chunk_size = (data[0] as usize % 64).max(1);
     for chunk in data[1..].chunks(chunk_size) {
@@ -25,4 +37,7 @@ fuzz_target!(|data: &[u8]| {
             }
         }
     }
+
+    // Exercise session expiration cleanup
+    let _ = deframer.cleanup_expired(std::time::Duration::from_millis(data.len() as u64));
 });

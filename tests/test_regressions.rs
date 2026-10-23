@@ -282,3 +282,97 @@ fn test_anchored_regex_encodings() {
         ContentEncoding::OtherString("chunk(512)extra".to_string())
     );
 }
+
+#[test]
+fn test_peer_encodings_registration_and_fallback() {
+    let mut deframer = Deframer::new();
+    let callsign = "F4JXQ";
+
+    // 1. Verify initially none
+    assert!(deframer.peer_encodings(callsign).is_none());
+
+    // 2. Register peer encoding pipeline (gzip, h, crc32)
+    let peer_pipeline = vec![
+        ContentEncoding::Gzip,
+        ContentEncoding::H,
+        ContentEncoding::Crc32,
+    ];
+    deframer.register_peer_encodings(callsign, peer_pipeline.clone());
+    assert_eq!(
+        deframer.peer_encodings(callsign),
+        Some(peer_pipeline.as_slice())
+    );
+
+    // 3. Create a PDU from F4JXQ that deliberately omits content_encoding from its header
+    let raw_payload = b"DTN Bundle Payload from registered peer F4JXQ!".to_vec();
+    let compressed = hqfbp_rs::codec::gzip_compress(&raw_payload).unwrap();
+
+    let header = Header {
+        message_id: Some(101),
+        original_message_id: Some(101),
+        src_callsign: Some(callsign.to_string()),
+        content_encoding: None, // No encoding in header
+        total_chunks: Some(1),
+        chunk_id: Some(0),
+        payload_size: Some(compressed.len() as u64),
+        ..Default::default()
+    };
+
+    let pdu_inner = hqfbp_rs::pack(&header, &compressed).unwrap();
+    // Post-boundary CRC32
+    let crc = hqfbp_rs::codec::crc32_std(&pdu_inner);
+    let mut pdu_wire = pdu_inner.to_vec();
+    pdu_wire.extend_from_slice(&crc);
+
+    // 4. Feed PDU to deframer: it should use registered peer pipeline and recover
+    deframer.receive_bytes(&pdu_wire);
+
+    let mut recovered = None;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            recovered = Some(me.payload.to_vec());
+        }
+    }
+    assert_eq!(recovered.as_deref(), Some(&raw_payload[..]));
+
+    // 5. Test unregister
+    assert_eq!(
+        deframer.unregister_peer_encodings(callsign),
+        Some(peer_pipeline)
+    );
+    assert!(deframer.peer_encodings(callsign).is_none());
+}
+
+#[test]
+fn test_session_cleanup_expired() {
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    let mut deframer = Deframer::new();
+    assert_eq!(deframer.active_sessions_count(), 0);
+
+    // Feed chunk 0 of 2 (incomplete session)
+    let header = Header {
+        message_id: Some(201),
+        original_message_id: Some(200),
+        src_callsign: Some("F1ABC".to_string()),
+        total_chunks: Some(2),
+        chunk_id: Some(0),
+        ..Default::default()
+    };
+    let pdu = hqfbp_rs::pack(&header, b"chunk 0").unwrap();
+    deframer.receive_bytes(&pdu);
+
+    assert_eq!(deframer.active_sessions_count(), 1);
+
+    // Check with large timeout: nothing expired
+    let purged = deframer.cleanup_expired(Duration::from_secs(60));
+    assert!(purged.is_empty());
+    assert_eq!(deframer.active_sessions_count(), 1);
+
+    // Sleep briefly and check with small timeout (10ms)
+    sleep(Duration::from_millis(15));
+    let purged = deframer.cleanup_expired(Duration::from_millis(10));
+    assert_eq!(purged, vec![(Some("F1ABC".to_string()), 200)]);
+    assert_eq!(deframer.active_sessions_count(), 0);
+}
