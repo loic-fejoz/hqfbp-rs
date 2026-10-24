@@ -212,6 +212,9 @@ impl PDUGenerator {
                 }
                 current_chunks = new_chunks;
             } else if let ContentEncoding::Chunk(size) = enc {
+                if size == 0 {
+                    anyhow::bail!("Chunk size cannot be zero");
+                }
                 let mut next_chunks = Vec::new();
                 for chunk in current_chunks {
                     let mut pos = 0;
@@ -363,5 +366,9 @@ pub fn calculate_max_chunk_size(
         );
     }
 
-    Ok(available - header_overhead)
+    let chunk_size = available - header_overhead;
+    if chunk_size == 0 {
+        anyhow::bail!("Calculated chunk size is zero");
+    }
+    Ok(chunk_size)
 }

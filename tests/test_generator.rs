@@ -328,3 +328,124 @@ fn test_generator_with_max_pdu_size() {
         );
     }
 }
+
+#[test]
+fn test_calculate_max_chunk_size_detailed_coverage() {
+    use hqfbp_rs::generator::calculate_max_chunk_size;
+
+    // Baseline with H only
+    let base = calculate_max_chunk_size(500, &[ContentEncoding::H], Some("F4AAA"), None).unwrap();
+    assert!(base > 400 && base < 500);
+
+    // Adding callsigns reduces chunk size due to header overhead
+    let with_dst =
+        calculate_max_chunk_size(500, &[ContentEncoding::H], Some("F4AAA"), Some("F4BBB")).unwrap();
+    assert!(with_dst < base);
+
+    // CRC16 reduces available space by 2
+    let with_crc16 = calculate_max_chunk_size(
+        500,
+        &[ContentEncoding::H, ContentEncoding::Crc16],
+        Some("F4AAA"),
+        None,
+    )
+    .unwrap();
+    assert!(with_crc16 < base);
+
+    // CRC32 reduces available space by 4 (more than CRC16)
+    let with_crc32 = calculate_max_chunk_size(
+        500,
+        &[ContentEncoding::H, ContentEncoding::Crc32],
+        Some("F4AAA"),
+        None,
+    )
+    .unwrap();
+    assert!(with_crc32 < with_crc16);
+
+    // Conv rate 1/2 divides available roughly in half
+    let with_conv = calculate_max_chunk_size(
+        500,
+        &[ContentEncoding::H, ContentEncoding::Conv(7, "1/2".into())],
+        Some("F4AAA"),
+        None,
+    )
+    .unwrap();
+    assert!(with_conv < 250);
+
+    // RS parameters: num_blocks * k
+    let with_rs = calculate_max_chunk_size(
+        500,
+        &[ContentEncoding::H, ContentEncoding::ReedSolomon(100, 80)],
+        Some("F4AAA"),
+        None,
+    )
+    .unwrap();
+    // 500 / 100 = 5 blocks * 80 = 400 available before header
+    assert!(with_rs < 400);
+
+    // Error cases
+    assert!(
+        calculate_max_chunk_size(3, &[ContentEncoding::H, ContentEncoding::Crc32], None, None)
+            .is_err()
+    );
+    assert!(
+        calculate_max_chunk_size(1, &[ContentEncoding::H, ContentEncoding::Crc16], None, None)
+            .is_err()
+    );
+    assert!(
+        calculate_max_chunk_size(
+            1,
+            &[ContentEncoding::H, ContentEncoding::Conv(7, "1/2".into())],
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        calculate_max_chunk_size(
+            500,
+            &[ContentEncoding::H, ContentEncoding::ReedSolomon(0, 10)],
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        calculate_max_chunk_size(
+            500,
+            &[ContentEncoding::H, ContentEncoding::ReedSolomon(100, 0)],
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        calculate_max_chunk_size(
+            500,
+            &[ContentEncoding::H, ContentEncoding::ReedSolomon(100, 100)],
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        calculate_max_chunk_size(
+            50,
+            &[ContentEncoding::H, ContentEncoding::ReedSolomon(100, 80)],
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(calculate_max_chunk_size(20, &[ContentEncoding::H], None, None).is_err()); // Leaves no room after header
+
+    // Chunk size 0 rejects
+    let mut gen_zero = PDUGenerator::new(
+        Some("F4AAA".into()),
+        None,
+        Some(vec![ContentEncoding::Chunk(0), ContentEncoding::H]),
+        None,
+        1,
+    );
+    assert!(gen_zero.generate(b"test", None).is_err());
+}
