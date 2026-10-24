@@ -34,6 +34,8 @@ fuzz_target!(|data: &[u8]| {
                 Event::Message(m) => {
                     let _ = m.payload.len();
                 }
+                Event::SessionExpired(_) => {}
+                Event::Duplicate(_) => {}
             }
         }
     }

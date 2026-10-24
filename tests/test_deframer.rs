@@ -349,6 +349,93 @@ fn test_deframer_multi_sender_interleaved_announcements() {
     assert_eq!(results.len(), 3);
 }
 
+#[test]
+fn test_tst3_multi_peer_interleaved_with_hostile_flood() {
+    let mut deframer = Deframer::new();
+
+    let peers = ["PEER1", "PEER2", "PEER3", "PEER4"];
+    let mut peer_pdus = Vec::new();
+    let mut expected_payloads = std::collections::HashMap::new();
+
+    for (idx, &callsign) in peers.iter().enumerate() {
+        let payload = format!(
+            "Hello from {callsign}! Highly confidential payload #{idx} repeat repeat repeat"
+        )
+        .into_bytes();
+        let mut generator = PDUGenerator::new(
+            Some(callsign.to_string()),
+            None,
+            Some(vec![
+                hqfbp_rs::ContentEncoding::Chunk(20),
+                hqfbp_rs::ContentEncoding::H,
+                hqfbp_rs::ContentEncoding::Crc32,
+            ]),
+            None,
+            1, // Overlapping message ID!
+        );
+        let pdus = generator.generate(&payload, None).expect("Generate failed");
+        assert!(pdus.len() > 3);
+        expected_payloads.insert(callsign.to_string(), payload);
+        peer_pdus.push(pdus);
+    }
+
+    // Generate hostile packets: random garbage and malicious CBOR
+    let mut hostile_pdus = Vec::new();
+    for i in 0..30 {
+        // Garbage non-CBOR
+        hostile_pdus.push(bytes::Bytes::from(vec![
+            0xFF, 0xFE, 0x00, i as u8, 0xAA, 0xBB,
+        ]));
+        // Conflicting chunk with bad chunk bounds
+        let evil_header = Header {
+            message_id: Some(1),
+            src_callsign: Some("PEER1".to_string()),
+            chunk_id: Some(999),
+            total_chunks: Some(2),
+            ..Default::default()
+        };
+        if let Ok(evil_pdu) = pack(&evil_header, b"evil injection payload") {
+            hostile_pdus.push(evil_pdu);
+        }
+    }
+
+    // Interleave all PDUs
+    let mut all_stream: Vec<bytes::Bytes> = Vec::new();
+    let max_chunks = peer_pdus.iter().map(|v| v.len()).max().unwrap();
+    for c in 0..max_chunks {
+        for pdus in &peer_pdus {
+            if c < pdus.len() {
+                all_stream.push(pdus[c].clone());
+            }
+        }
+        if let Some(h) = hostile_pdus.pop() {
+            all_stream.push(h);
+        }
+    }
+    all_stream.extend(hostile_pdus);
+
+    // Feed deframer
+    for pdu in all_stream {
+        deframer.receive_bytes(&pdu);
+    }
+
+    let mut recovered = std::collections::HashMap::new();
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev
+            && let Some(src) = me.header.src_callsign
+        {
+            recovered.insert(src, me.payload.to_vec());
+        }
+    }
+
+    for (callsign, expected) in expected_payloads {
+        let actual = recovered
+            .get(&callsign)
+            .unwrap_or_else(|| panic!("Missing message from {callsign}"));
+        assert_eq!(actual, &expected, "Mismatch for peer {callsign}");
+    }
+}
+
 fn range(r: std::ops::Range<usize>) -> std::ops::Range<usize> {
     r
 }

@@ -13,10 +13,18 @@ pub fn encode_kiss_frame(pdu: &[u8]) -> Vec<u8> {
 
 /// Encodes a raw PDU into a KISS data frame for a specific port (0..=15).
 pub fn encode_kiss_frame_with_port(pdu: &[u8], port: u8) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(pdu.len() + 4);
+    let mut frame = Vec::with_capacity(pdu.len() + 6);
     frame.push(FEND);
     let cmd = (port & 0x0F) << 4; // Command 0 (DataFrame) on designated port
-    frame.push(cmd);
+    if cmd == FEND {
+        frame.push(FESC);
+        frame.push(TFEND);
+    } else if cmd == FESC {
+        frame.push(FESC);
+        frame.push(TFESC);
+    } else {
+        frame.push(cmd);
+    }
 
     for &byte in pdu {
         if byte == FEND {

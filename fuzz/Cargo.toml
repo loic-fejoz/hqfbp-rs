@@ -9,6 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3", features = ["derive"] }
 bytes = "1.9"
 
 [dependencies.hqfbp-rs]
@@ -24,6 +25,20 @@ bench = false
 [[bin]]
 name = "fuzz_kiss_decoder"
 path = "fuzz_targets/fuzz_kiss_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_kiss_stream"
+path = "fuzz_targets/fuzz_kiss_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_header_pipeline"
+path = "fuzz_targets/fuzz_header_pipeline.rs"
 test = false
 doc = false
 bench = false

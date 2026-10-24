@@ -7,7 +7,7 @@ fuzz_target!(|data: &[u8]| {
     let mut decoder = KissDecoder::new();
     for &byte in data {
         if let Some(frame) = decoder.process_byte(byte) {
-            let _ = frame.len();
+            let _ = hqfbp_rs::kiss::parse_kiss_frame(&frame);
         }
     }
 });
