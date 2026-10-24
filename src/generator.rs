@@ -38,6 +38,48 @@ impl PDUGenerator {
         }
     }
 
+    /// Automatically configures chunking so that generated PDUs do not exceed `max_pdu_size`.
+    pub fn with_max_pdu_size(mut self, max_pdu_size: usize) -> Result<Self> {
+        let chunk_size = calculate_max_chunk_size(
+            max_pdu_size,
+            &self.encodings,
+            self.src_callsign.as_deref(),
+            self.dst_callsign.as_deref(),
+        )?;
+
+        if !self
+            .encodings
+            .iter()
+            .any(|e| matches!(e, ContentEncoding::H))
+        {
+            self.encodings.push(ContentEncoding::H);
+        }
+        let h_idx = self
+            .encodings
+            .iter()
+            .position(|e| matches!(e, ContentEncoding::H))
+            .unwrap();
+
+        let mut existing_chunk_idx = None;
+        for (i, enc) in self.encodings[..h_idx].iter().enumerate() {
+            if matches!(enc, ContentEncoding::Chunk(_)) {
+                existing_chunk_idx = Some(i);
+                break;
+            }
+        }
+
+        if let Some(idx) = existing_chunk_idx {
+            if let ContentEncoding::Chunk(ref mut cur_size) = self.encodings[idx] {
+                *cur_size = (*cur_size).min(chunk_size);
+            }
+        } else {
+            self.encodings
+                .insert(h_idx, ContentEncoding::Chunk(chunk_size));
+        }
+
+        Ok(self)
+    }
+
     fn get_next_msg_id(&mut self) -> u32 {
         let id = self.next_msg_id;
         self.next_msg_id = self.next_msg_id.wrapping_add(1);
@@ -236,4 +278,90 @@ impl PDUGenerator {
         final_pdus.extend(current_chunks);
         Ok(final_pdus)
     }
+}
+
+/// Calculates the maximum payload chunk size such that the final generated PDUs
+/// (including CBOR headers and post-`H` FEC expansions) will not exceed `max_pdu_size`.
+pub fn calculate_max_chunk_size(
+    max_pdu_size: usize,
+    encodings: &[ContentEncoding],
+    src_callsign: Option<&str>,
+    dst_callsign: Option<&str>,
+) -> Result<usize> {
+    let mut resolved = encodings.to_vec();
+    if !resolved.iter().any(|e| matches!(e, ContentEncoding::H)) {
+        resolved.push(ContentEncoding::H);
+    }
+
+    let h_idx = resolved
+        .iter()
+        .position(|e| matches!(e, ContentEncoding::H))
+        .unwrap();
+    let post_h = &resolved[h_idx + 1..];
+
+    let mut available = max_pdu_size;
+    for enc in post_h.iter().rev() {
+        match enc {
+            ContentEncoding::Crc32 => {
+                available = available
+                    .checked_sub(4)
+                    .ok_or_else(|| anyhow::anyhow!("max_pdu_size too small for CRC32"))?;
+            }
+            ContentEncoding::Crc16 => {
+                available = available
+                    .checked_sub(2)
+                    .ok_or_else(|| anyhow::anyhow!("max_pdu_size too small for CRC16"))?;
+            }
+            ContentEncoding::ReedSolomon(n, k) => {
+                if *n == 0 || *k == 0 || *k >= *n {
+                    anyhow::bail!("Invalid RS parameters ({n}, {k})");
+                }
+                let num_blocks = available / n;
+                if num_blocks == 0 {
+                    anyhow::bail!("max_pdu_size {available} is smaller than RS block length {n}");
+                }
+                available = num_blocks * k;
+            }
+            ContentEncoding::Conv(_k, rate) if rate == "1/2" => {
+                if available < 2 {
+                    anyhow::bail!("max_pdu_size too small for Conv(1/2)");
+                }
+                available = (available - 1) / 2;
+            }
+            _ => {}
+        }
+    }
+
+    // Add Chunk placeholder to encodings for accurate header size estimation
+    if !resolved
+        .iter()
+        .take(h_idx)
+        .any(|e| matches!(e, ContentEncoding::Chunk(_)))
+    {
+        resolved.insert(h_idx, ContentEncoding::Chunk(available));
+    }
+
+    // Conservative header overhead estimation using a multi-chunk header template
+    let dummy_header = Header {
+        message_id: Some(65535),
+        src_callsign: src_callsign.map(|s| s.to_string()),
+        dst_callsign: dst_callsign.map(|s| s.to_string()),
+        content_encoding: Some(crate::EncodingList(resolved)),
+        file_size: Some(10_000_000),
+        chunk_id: Some(1000),
+        original_message_id: Some(65535),
+        total_chunks: Some(1000),
+        payload_size: Some(available as u64),
+        ..Default::default()
+    };
+    let dummy_pack = pack(&dummy_header, &vec![0u8; available.min(1024)])?;
+    let header_overhead = (dummy_pack.len() - available.min(1024)) + 4; // +4 bytes safety margin
+
+    if available <= header_overhead {
+        anyhow::bail!(
+            "max_pdu_size leaves no room for payload after header overhead ({header_overhead} bytes)"
+        );
+    }
+
+    Ok(available - header_overhead)
 }

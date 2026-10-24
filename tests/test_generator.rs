@@ -302,3 +302,29 @@ fn test_generator_chunking() {
     }
     assert_eq!(reassembled, data);
 }
+
+#[test]
+fn test_generator_with_max_pdu_size() {
+    let max_pdu = 250;
+    let encodings = vec![
+        ContentEncoding::H,
+        ContentEncoding::ReedSolomon(100, 80),
+        ContentEncoding::Crc32,
+    ];
+    let mut generator =
+        PDUGenerator::new(Some("F4JXQ".to_string()), None, Some(encodings), None, 1)
+            .with_max_pdu_size(max_pdu)
+            .expect("Config with max_pdu_size should succeed");
+
+    let data = vec![0xAB; 500]; // 500 bytes of data
+    let pdus = generator.generate(&data, None).expect("Generate failed");
+
+    assert!(pdus.len() > 1);
+    for (i, pdu) in pdus.iter().enumerate() {
+        assert!(
+            pdu.len() <= max_pdu,
+            "PDU #{i} length {} exceeds max_pdu {max_pdu}",
+            pdu.len()
+        );
+    }
+}

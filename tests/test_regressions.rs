@@ -699,3 +699,30 @@ fn test_p1_dtn1_session_expired_event() {
     }
     assert!(saw_expired_event);
 }
+
+#[test]
+fn test_ham6_compression_levels() {
+    use hqfbp_rs::codec::{
+        brotli_compress_with_params, brotli_decompress, deflate_compress_with_level,
+        deflate_decompress, gzip_compress_with_level, gzip_decompress,
+    };
+
+    let sample =
+        b"The quick brown fox jumps over the lazy dog. Repeat repeat repeat repeat!".repeat(10);
+
+    for level in [1, 6, 9] {
+        let gz = gzip_compress_with_level(&sample, level).unwrap();
+        let decomp = gzip_decompress(&gz).unwrap();
+        assert_eq!(decomp, sample);
+
+        let def = deflate_compress_with_level(&sample, level).unwrap();
+        let decomp_def = deflate_decompress(&def).unwrap();
+        assert_eq!(decomp_def, sample);
+    }
+
+    for quality in [1, 6, 11] {
+        let br = brotli_compress_with_params(&sample, quality, 22).unwrap();
+        let decomp_br = brotli_decompress(&br).unwrap();
+        assert_eq!(decomp_br, sample);
+    }
+}

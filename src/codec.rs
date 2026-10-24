@@ -69,7 +69,11 @@ impl<W: Write> Write for BoundedWriter<W> {
 }
 
 pub fn gzip_compress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    gzip_compress_with_level(data, 6)
+}
+
+pub fn gzip_compress_with_level(data: &[u8], level: u32) -> Result<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::new(level.min(9)));
     encoder.write_all(data)?;
     Ok(encoder.finish()?)
 }
@@ -85,7 +89,11 @@ pub fn gzip_decompress(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn deflate_compress(data: &[u8]) -> Result<Vec<u8>> {
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    deflate_compress_with_level(data, 6)
+}
+
+pub fn deflate_compress_with_level(data: &[u8], level: u32) -> Result<Vec<u8>> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(level.min(9)));
     encoder.write_all(data)?;
     Ok(encoder.finish()?)
 }
@@ -107,8 +115,12 @@ pub fn deflate_decompress(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 pub fn brotli_compress(data: &[u8]) -> Result<Vec<u8>> {
+    brotli_compress_with_params(data, 6, 22)
+}
+
+pub fn brotli_compress_with_params(data: &[u8], quality: u32, lgwin: u32) -> Result<Vec<u8>> {
     let mut res = Vec::new();
-    let mut writer = brotli::CompressorWriter::new(&mut res, 4096, 6, 22);
+    let mut writer = brotli::CompressorWriter::new(&mut res, 4096, quality.min(11), lgwin.min(24));
     writer.write_all(data)?;
     writer.flush()?;
     drop(writer);
