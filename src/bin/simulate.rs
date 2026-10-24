@@ -13,6 +13,13 @@ struct Args {
 
     #[arg(
         long,
+        default_value_t = 0.0,
+        help = "Packet / PDU Erasure / Loss Rate (0.0 to 1.0)"
+    )]
+    loss: f64,
+
+    #[arg(
+        long,
         default_value = "h",
         help = "Content encodings (e.g. gzip,h,crc32)"
     )]
@@ -300,6 +307,12 @@ fn main() -> Result<()> {
         let mut recovered = false;
 
         for (clean_pdu, expected_payload) in clean_pdus_info.iter() {
+            // Check for packet erasure (loss)
+            if args.loss > 0.0 && rand::thread_rng().gen_bool(args.loss.min(1.0)) {
+                metrics.add_pdu(clean_pdu, true, 0);
+                continue;
+            }
+
             let (noisy_pdu, errors_in_pdu) = channel.process(clean_pdu);
 
             noisy_deframer.receive_bytes(&noisy_pdu);
