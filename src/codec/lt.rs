@@ -81,12 +81,9 @@ impl RobustSoliton {
 
     pub fn sample(&self, prng: &mut SplitMix64) -> usize {
         let val = (prng.next_u64() as f64) / 18446744073709551616.0; // 2^64
-        for d in 1..=self.k {
-            if val < self.cdf[d] {
-                return d;
-            }
-        }
-        1
+        // Binary search using partition_point on the monotonic CDF
+        let idx = self.cdf[1..=self.k].partition_point(|&c| c <= val) + 1;
+        idx.min(self.k)
     }
 }
 

@@ -372,7 +372,7 @@ fn get_conv_re() -> &'static Regex {
 }
 fn get_scr_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^scr\((0x[0-9a-fA-F]+|\d+)\)$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^scr\(([a-zA-Z0-9_]+)\)$").unwrap())
 }
 fn get_chunk_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -528,7 +528,13 @@ impl TryFrom<&str> for ContentEncoding {
             Ok(ContentEncoding::Conv(k, rate))
         } else if let Some(m) = get_scr_re().captures(s) {
             let ps = &m[1];
-            let p = if let Some(stripped) = ps.strip_prefix("0x") {
+            let p = if ps.eq_ignore_ascii_case("g3ruh") {
+                // 1 + x^12 + x^17 -> mask 0x20800
+                (1 << 17) | (1 << 12)
+            } else if ps.eq_ignore_ascii_case("ccsds") {
+                // 1 + x^3 + x^5 + x^7 + x^8 -> mask 0x1A9
+                0x1A9
+            } else if let Some(stripped) = ps.strip_prefix("0x") {
                 u64::from_str_radix(stripped, 16)?
             } else {
                 ps.parse()?

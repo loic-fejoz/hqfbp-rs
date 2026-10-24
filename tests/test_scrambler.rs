@@ -84,3 +84,12 @@ fn test_scrambler_different_polynomials() {
     assert_eq!(scr_xor(&e1, p1), data);
     assert_eq!(scr_xor(&e2, p2), data);
 }
+
+#[test]
+fn test_scrambler_named_aliases() {
+    let s_g3ruh = ContentEncoding::try_from("scr(g3ruh)").unwrap();
+    let s_ccsds = ContentEncoding::try_from("scr(ccsds)").unwrap();
+
+    assert_eq!(s_g3ruh, ContentEncoding::Scrambler((1 << 17) | (1 << 12)));
+    assert_eq!(s_ccsds, ContentEncoding::Scrambler(0x1A9));
+}
