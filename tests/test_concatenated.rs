@@ -20,7 +20,6 @@ mod tests {
         let mut generator = PDUGenerator::new(
             Some("SRC".to_string()),
             None,
-            None,
             Some(encs),
             Some(vec![
                 ContentEncoding::H,

@@ -9,7 +9,6 @@ fn test_chunk_rs_after_h() {
     let mut generator = PDUGenerator::new(
         Some("TEST".to_string()),
         None,
-        None,
         Some(vec![
             ContentEncoding::Gzip,
             ContentEncoding::H,

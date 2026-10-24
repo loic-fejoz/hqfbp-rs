@@ -44,7 +44,6 @@ fn test_generator_deframer_scrambler_integration() {
     let mut generator = PDUGenerator::new(
         Some("SCR-TEST".to_string()),
         None,
-        None,
         Some(vec![
             ContentEncoding::Scrambler(poly as u64),
             ContentEncoding::H,

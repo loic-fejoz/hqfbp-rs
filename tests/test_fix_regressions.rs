@@ -10,7 +10,6 @@ fn test_regression_repeat_rs_pdu_level() {
     let mut generator = PDUGenerator::new(
         Some("TEST".to_string()),
         None,
-        None,
         Some(vec![
             ContentEncoding::H,
             ContentEncoding::ReedSolomon(255, 223),
@@ -55,7 +54,6 @@ fn test_regression_systematic_rs_header_corrupt() {
     let mut generator = PDUGenerator::new(
         Some("TEST".to_string()),
         None,
-        None,
         Some(vec![
             ContentEncoding::H,
             ContentEncoding::ReedSolomon(255, 223),
@@ -79,7 +77,6 @@ fn test_regression_systematic_rs_header_corrupt() {
     // because Phase 1 (peek) will fail, and Phase 2 needs ann_encs.
     let mut ann_gen = PDUGenerator::new(
         Some("TEST".to_string()),
-        None,
         None,
         Some(vec![ContentEncoding::H]),
         None,

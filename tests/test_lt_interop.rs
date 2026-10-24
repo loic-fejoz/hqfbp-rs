@@ -30,7 +30,6 @@ fn test_lt_rust_roundtrip() -> Result<()> {
     let mut generator = PDUGenerator::new(
         Some("RUST".to_string()),
         None,
-        None,
         Some(encs),
         Some(vec![ContentEncoding::Identity]),
         1,

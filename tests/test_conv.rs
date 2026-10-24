@@ -47,7 +47,6 @@ fn test_generator_deframer_conv_integration() {
     let mut generator = PDUGenerator::new(
         Some("CONV-TEST".to_string()),
         None,
-        None,
         Some(vec![
             ContentEncoding::Conv(7, "1/2".to_string()),
             ContentEncoding::H,

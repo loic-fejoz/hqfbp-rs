@@ -35,8 +35,16 @@ fn test_deframer_single_pdu() {
 #[test]
 fn test_deframer_chunked() {
     let mut deframer = Deframer::new();
-    let mut generator =
-        PDUGenerator::new(Some("F4JXQ-1".to_string()), None, Some(10), None, None, 1);
+    let mut generator = PDUGenerator::new(
+        Some("F4JXQ-1".to_string()),
+        None,
+        Some(vec![
+            hqfbp_rs::ContentEncoding::Chunk(10),
+            hqfbp_rs::ContentEncoding::H,
+        ]),
+        None,
+        1,
+    );
     let data = b"This is a longer message that will be chunked.";
     let pdus = generator.generate(data, None).expect("Generate failed");
     assert!(pdus.len() > 1);
@@ -96,11 +104,29 @@ fn test_deframer_multi_sender() {
     let mut deframer = Deframer::new();
 
     // Sender 1
-    let mut generator1 = PDUGenerator::new(Some("S1".to_string()), None, Some(5), None, None, 100);
+    let mut generator1 = PDUGenerator::new(
+        Some("S1".to_string()),
+        None,
+        Some(vec![
+            hqfbp_rs::ContentEncoding::Chunk(5),
+            hqfbp_rs::ContentEncoding::H,
+        ]),
+        None,
+        100,
+    );
     let pdus1 = generator1.generate(b"S1DATA", None).unwrap(); // 2 chunks
 
     // Sender 2
-    let mut generator2 = PDUGenerator::new(Some("S2".to_string()), None, Some(5), None, None, 200);
+    let mut generator2 = PDUGenerator::new(
+        Some("S2".to_string()),
+        None,
+        Some(vec![
+            hqfbp_rs::ContentEncoding::Chunk(5),
+            hqfbp_rs::ContentEncoding::H,
+        ]),
+        None,
+        200,
+    );
     let pdus2 = generator2.generate(b"S2DATA", None).unwrap(); // 2 chunks
 
     // Interleave PDUs
@@ -135,7 +161,6 @@ fn test_deframer_announcement_and_crc() {
     let mut generator = PDUGenerator::new(
         Some("F4JXQ-2".to_string()),
         None,
-        None,
         Some(vec![
             hqfbp_rs::ContentEncoding::H,
             hqfbp_rs::ContentEncoding::Crc32,
@@ -166,7 +191,6 @@ fn test_deframer_compression() {
     let mut generator = PDUGenerator::new(
         Some("GZIPPER".to_string()),
         None,
-        None,
         Some(vec![hqfbp_rs::ContentEncoding::Gzip]),
         None,
         1,
@@ -192,7 +216,6 @@ fn test_deframer_heuristic_gzip_header() {
     let data = b"Heuristic data with gzipped header";
     let mut generator = PDUGenerator::new(
         Some("HEURISTIC-1".to_string()),
-        None,
         None,
         Some(vec![
             hqfbp_rs::ContentEncoding::H,
@@ -223,7 +246,6 @@ fn test_deframer_heuristic_multi_encodings() {
     let mut generator = PDUGenerator::new(
         Some("HEURISTIC-2".to_string()),
         None,
-        None,
         Some(vec![
             hqfbp_rs::ContentEncoding::H,
             hqfbp_rs::ContentEncoding::Gzip,
@@ -252,7 +274,16 @@ fn test_deframer_multi_sender_interleaved_announcements() {
     let mut deframer = Deframer::new();
 
     // S1: Standard
-    let mut gen1 = PDUGenerator::new(Some("S1".to_string()), None, Some(10), None, None, 1);
+    let mut gen1 = PDUGenerator::new(
+        Some("S1".to_string()),
+        None,
+        Some(vec![
+            hqfbp_rs::ContentEncoding::Chunk(10),
+            hqfbp_rs::ContentEncoding::H,
+        ]),
+        None,
+        1,
+    );
     let data1 = b"S1: Basic data";
     let pdus1 = gen1.generate(data1, None).unwrap();
 
@@ -260,8 +291,8 @@ fn test_deframer_multi_sender_interleaved_announcements() {
     let mut gen2 = PDUGenerator::new(
         Some("S2".to_string()),
         None,
-        Some(10),
         Some(vec![
+            hqfbp_rs::ContentEncoding::Chunk(10),
             hqfbp_rs::ContentEncoding::H,
             hqfbp_rs::ContentEncoding::Gzip,
         ]),
@@ -275,8 +306,8 @@ fn test_deframer_multi_sender_interleaved_announcements() {
     let mut gen3 = PDUGenerator::new(
         Some("S3".to_string()),
         None,
-        Some(10),
         Some(vec![
+            hqfbp_rs::ContentEncoding::Chunk(10),
             hqfbp_rs::ContentEncoding::H,
             hqfbp_rs::ContentEncoding::Gzip,
             hqfbp_rs::ContentEncoding::Crc32,

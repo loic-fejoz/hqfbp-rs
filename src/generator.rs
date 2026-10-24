@@ -6,7 +6,6 @@ use bytes::Bytes;
 pub struct PDUGenerator {
     src_callsign: Option<String>,
     dst_callsign: Option<String>,
-    max_payload_size: Option<usize>,
     encodings: Vec<ContentEncoding>,
     announcement_encoder: Option<Box<PDUGenerator>>,
     next_msg_id: u32,
@@ -16,7 +15,6 @@ impl PDUGenerator {
     pub fn new(
         src_callsign: Option<String>,
         dst_callsign: Option<String>,
-        max_payload_size: Option<usize>,
         encodings: Option<Vec<ContentEncoding>>,
         announcement_encodings: Option<Vec<ContentEncoding>>,
         initial_msg_id: u32,
@@ -25,7 +23,6 @@ impl PDUGenerator {
             Box::new(PDUGenerator::new(
                 src_callsign.clone(),
                 dst_callsign.clone(),
-                None,
                 Some(e),
                 None,
                 initial_msg_id,
@@ -35,7 +32,6 @@ impl PDUGenerator {
         Self {
             src_callsign,
             dst_callsign,
-            max_payload_size,
             encodings: encodings.unwrap_or_default(),
             announcement_encoder: ann_encoder,
             next_msg_id: initial_msg_id,
@@ -113,25 +109,6 @@ impl PDUGenerator {
         let has_boundary = encs.iter().any(|e| matches!(e, ContentEncoding::H));
         if !has_boundary {
             encs.push(ContentEncoding::H);
-        }
-
-        let boundary_idx = encs
-            .iter()
-            .position(|e| matches!(e, ContentEncoding::H))
-            .unwrap();
-        let pre = &encs[..boundary_idx];
-
-        let has_chunk = pre.iter().any(|e| matches!(e, ContentEncoding::Chunk(_)));
-
-        if !has_chunk && let Some(limit) = self.max_payload_size {
-            let mut new_encs = Vec::new();
-            for (i, e) in encs.iter().enumerate() {
-                if i == boundary_idx {
-                    new_encs.push(ContentEncoding::Chunk(limit));
-                }
-                new_encs.push(e.clone());
-            }
-            return new_encs;
         }
 
         encs

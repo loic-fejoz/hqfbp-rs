@@ -265,7 +265,6 @@ fn main() -> Result<()> {
         let mut generator = PDUGenerator::new(
             Some("SIMUL".to_string()),
             None,
-            None,
             Some(encs.clone()),
             ann_encs.clone(),
             1,

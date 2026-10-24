@@ -26,9 +26,6 @@ struct Args {
     #[arg(long, help = "Comma-separated list of announcement encodings")]
     ann_encodings: Option<String>,
 
-    #[arg(long, help = "Maximum payload size for chunking")]
-    max_payload_size: Option<usize>,
-
     #[arg(long, help = "Starting message ID")]
     msg_id: Option<u32>,
 
@@ -74,7 +71,6 @@ fn main() -> Result<()> {
     let mut generator = PDUGenerator::new(
         Some(args.src_callsign),
         None,
-        args.max_payload_size,
         encodings,
         ann_encodings,
         args.msg_id.unwrap_or(1),

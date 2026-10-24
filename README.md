@@ -39,7 +39,6 @@ fn main() -> anyhow::Result<()> {
     let mut gen = PDUGenerator::new(
         Some("F4JXQ".to_string()),
         None, // dst_callsign
-        None, // max_payload_size
         Some(vec![
             ContentEncoding::Gzip,
             ContentEncoding::H,

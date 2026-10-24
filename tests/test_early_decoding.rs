@@ -16,7 +16,6 @@ fn test_deframer_early_rq_decoding() {
     let mut generator = PDUGenerator::new(
         Some("EARLY-RQ".to_string()),
         None,
-        None,
         Some(vec![
             ContentEncoding::RaptorQ(dlen, mtu, repair),
             ContentEncoding::H,
@@ -62,7 +61,6 @@ fn test_deframer_early_rq_with_loss() {
 
     let mut generator = PDUGenerator::new(
         Some("RQ-LOSS".to_string()),
-        None,
         None,
         Some(vec![
             ContentEncoding::RaptorQ(dlen, mtu, repair),
@@ -110,7 +108,6 @@ fn test_deframer_rq_wait_for_enough_symbols() {
 
     let mut generator = PDUGenerator::new(
         Some("RQ-WAIT".to_string()),
-        None,
         None,
         Some(vec![
             ContentEncoding::RaptorQ(dlen, mtu, repair),

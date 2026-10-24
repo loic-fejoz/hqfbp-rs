@@ -6,7 +6,7 @@ use std::io::Write;
 
 #[test]
 fn test_generator_single_pdu() {
-    let mut generator = PDUGenerator::new(Some("F4JXQ-1".to_string()), None, None, None, None, 1);
+    let mut generator = PDUGenerator::new(Some("F4JXQ-1".to_string()), None, None, None, 1);
     let data = b"Hello World";
 
     let pdus = generator
@@ -35,14 +35,8 @@ fn test_generator_single_pdu() {
 #[test]
 fn test_generator_initial_msg_id() {
     let initial_id = 42;
-    let mut generator = PDUGenerator::new(
-        Some("F4JXQ-1".to_string()),
-        None,
-        None,
-        None,
-        None,
-        initial_id,
-    );
+    let mut generator =
+        PDUGenerator::new(Some("F4JXQ-1".to_string()), None, None, None, initial_id);
     let data = b"Initial ID test";
 
     let pdus = generator.generate(data, None).expect("Generate failed");
@@ -56,7 +50,6 @@ fn test_generator_initial_msg_id() {
 fn test_generator_single_gzip_pdu() {
     let mut generator = PDUGenerator::new(
         Some("F4JXQ-1".to_string()),
-        None,
         None,
         Some(vec![ContentEncoding::Gzip]),
         None,
@@ -89,7 +82,6 @@ fn test_generator_single_lzma_pdu() {
     let mut generator = PDUGenerator::new(
         Some("F4JXQ-1".to_string()),
         None,
-        None,
         Some(vec![ContentEncoding::Lzma]),
         None,
         1,
@@ -119,7 +111,6 @@ fn test_generator_single_lzma_pdu() {
 fn test_generator_single_brotli_pdu() {
     let mut generator = PDUGenerator::new(
         Some("F4JXQ-1".to_string()),
-        None,
         None,
         Some(vec![ContentEncoding::Brotli]),
         None,
@@ -159,8 +150,7 @@ fn test_generator_gzip_before_chunking() {
     let mut generator = PDUGenerator::new(
         Some("F4JXQ".to_string()),
         None,
-        Some(50),
-        Some(vec![ContentEncoding::Gzip]),
+        Some(vec![ContentEncoding::Gzip, ContentEncoding::Chunk(50)]),
         None,
         1,
     );
@@ -177,7 +167,6 @@ fn test_generator_crc_payload_only() {
     // Pre-boundary CRC (payload only)
     let mut generator = PDUGenerator::new(
         Some("F4JXQ".to_string()),
-        None,
         None,
         Some(vec![ContentEncoding::Crc32]),
         None,
@@ -199,7 +188,6 @@ fn test_generator_crc_covering_header() {
     // Post-boundary CRC (covering header + payload)
     let mut generator = PDUGenerator::new(
         Some("F4JXQ".to_string()),
-        None,
         None,
         Some(vec![ContentEncoding::H, ContentEncoding::Crc32]),
         None,
@@ -228,7 +216,6 @@ fn test_generator_announcement() {
     let data = b"Some data";
     let mut generator = PDUGenerator::new(
         Some("F4JXQ".to_string()),
-        None,
         None,
         Some(vec![
             ContentEncoding::Gzip,
@@ -290,7 +277,13 @@ fn test_generator_announcement() {
 
 #[test]
 fn test_generator_chunking() {
-    let mut generator = PDUGenerator::new(Some("F4JXQ".to_string()), None, Some(10), None, None, 1);
+    let mut generator = PDUGenerator::new(
+        Some("F4JXQ".to_string()),
+        None,
+        Some(vec![ContentEncoding::Chunk(10), ContentEncoding::H]),
+        None,
+        1,
+    );
     let data = b"This is a longer piece of data that should be chunked.";
     assert_eq!(data.len(), 54);
 

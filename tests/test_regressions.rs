@@ -6,7 +6,7 @@ use hqfbp_rs::{ContentEncoding, Header};
 fn test_quality_prioritization_regression() {
     let data = b"Hello Quality World!".to_vec();
     let encs = vec![ContentEncoding::H, ContentEncoding::ReedSolomon(255, 223)];
-    let mut generator = PDUGenerator::new(Some("SRC".to_string()), None, None, Some(encs), None, 1);
+    let mut generator = PDUGenerator::new(Some("SRC".to_string()), None, Some(encs), None, 1);
     let pdus = generator.generate(&data, None).unwrap();
 
     let mut deframer = Deframer::new();
@@ -57,7 +57,7 @@ fn test_deframer_no_panic_on_missing_message_id() {
 
     // Verify deframer is still functional
     let data = b"Normal payload".to_vec();
-    let mut generator = PDUGenerator::new(Some("SRC".to_string()), None, None, None, None, 42);
+    let mut generator = PDUGenerator::new(Some("SRC".to_string()), None, None, None, 42);
     let normal_pdus = generator.generate(&data, None).unwrap();
     for p in normal_pdus {
         deframer.receive_bytes(&p);
@@ -207,7 +207,7 @@ fn test_deflate_codec_and_deframer_roundtrip() {
         ContentEncoding::H,
         ContentEncoding::Crc32,
     ];
-    let mut generator = PDUGenerator::new(Some("DEF".to_string()), None, None, Some(encs), None, 1);
+    let mut generator = PDUGenerator::new(Some("DEF".to_string()), None, Some(encs), None, 1);
     let pdus = generator.generate(original, None).expect("Generate failed");
 
     let mut deframer = Deframer::new();

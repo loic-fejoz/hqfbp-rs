@@ -53,7 +53,6 @@ fn test_generator_deframer_rq_post_boundary() {
     let mut generator = PDUGenerator::new(
         Some("F4JXQ".to_string()),
         None,
-        None,
         Some(vec![
             ContentEncoding::H,
             ContentEncoding::RaptorQ(rq_len, mtu, repair_count),

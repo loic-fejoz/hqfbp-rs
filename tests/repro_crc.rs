@@ -14,14 +14,8 @@ mod tests {
         ];
 
         // Generator
-        let mut generator = PDUGenerator::new(
-            Some("SRC".to_string()),
-            None,
-            None,
-            Some(encs.clone()),
-            None,
-            1,
-        );
+        let mut generator =
+            PDUGenerator::new(Some("SRC".to_string()), None, Some(encs.clone()), None, 1);
         let pdus = generator.generate(&data, None).unwrap();
         assert_eq!(pdus.len(), 1);
         let pdu = &pdus[0];
