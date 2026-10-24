@@ -317,7 +317,13 @@ pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result
         };
 
         let packet = raptorq::EncodingPacket::deserialize(p_ref);
-        if let Some(res) = decoder.decode(packet) {
+        if packet.payload_id().source_block_number() >= oti.source_blocks() {
+            continue;
+        }
+
+        let decoded =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decoder.decode(packet)));
+        if let Ok(Some(res)) = decoded {
             return Ok(res);
         }
     }

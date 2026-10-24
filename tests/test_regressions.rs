@@ -376,3 +376,16 @@ fn test_session_cleanup_expired() {
     assert_eq!(purged, vec![(Some("F1ABC".to_string()), 200)]);
     assert_eq!(deframer.active_sessions_count(), 0);
 }
+
+#[test]
+fn test_rq_fuzz_crash() {
+    let input = [
+        57u8, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 255, 255, 57, 57, 57, 57, 57, 57,
+        57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 57, 171, 91, 91, 254, 91, 212, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255,
+    ];
+    let payload = &input[1..];
+    let b = vec![bytes::Bytes::copy_from_slice(payload)];
+    let _ = hqfbp_rs::codec::rq_decode(b, payload.len().max(1), 64);
+}
