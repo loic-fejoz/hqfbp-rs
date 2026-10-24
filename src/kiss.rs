@@ -43,6 +43,21 @@ impl KissDecoder {
 
     /// Feeds a single byte into the decoder, returning a completed frame if available.
     pub fn process_byte(&mut self, byte: u8) -> Option<Vec<u8>> {
+        if byte == FEND {
+            if self.in_frame && !self.buffer.is_empty() {
+                let frame = std::mem::take(&mut self.buffer);
+                self.escaped = false;
+                // Remains in_frame = true because FEND also marks the start of the next frame
+                return Some(frame);
+            } else {
+                // Leading or redundant FEND: start of a frame, clear buffer
+                self.in_frame = true;
+                self.buffer.clear();
+                self.escaped = false;
+                return None;
+            }
+        }
+
         if self.in_frame {
             if self.buffer.len() >= MAX_KISS_FRAME_SIZE {
                 self.in_frame = false;
@@ -53,15 +68,8 @@ impl KissDecoder {
                 );
                 return None;
             }
-            if byte == FEND {
-                self.in_frame = false;
-                if !self.buffer.is_empty() {
-                    let frame = std::mem::take(&mut self.buffer);
-                    return Some(frame);
-                } else {
-                    return None;
-                }
-            } else if byte == FESC {
+
+            if byte == FESC {
                 self.escaped = true;
             } else if self.escaped {
                 if byte == TFEND {
@@ -69,16 +77,14 @@ impl KissDecoder {
                 } else if byte == TFESC {
                     self.buffer.push(FESC);
                 } else {
-                    self.buffer.push(byte);
+                    // Invalid escape sequence in KISS standard: drop or push?
+                    // To be robust against noise, log warning and ignore invalid escape
+                    log::debug!("Invalid KISS escape sequence: FESC followed by 0x{byte:02x}");
                 }
                 self.escaped = false;
             } else {
                 self.buffer.push(byte);
             }
-        } else if byte == FEND {
-            self.in_frame = true;
-            self.buffer.clear();
-            self.escaped = false;
         }
         None
     }

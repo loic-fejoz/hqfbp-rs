@@ -256,6 +256,8 @@ pub fn rs_decode(data: &[u8], n: usize, k: usize) -> Result<(Vec<u8>, usize)> {
     Ok((decoded, total_corrected))
 }
 
+pub const RQ_MAX_K: usize = 56_403;
+
 pub fn rq_encode(
     data: &[u8],
     original_count: usize,
@@ -266,8 +268,8 @@ pub fn rq_encode(
         bail!("Invalid RaptorQ encoding parameters: original_count={original_count}, mtu={mtu}");
     }
     let k = original_count.div_ceil(mtu as usize);
-    if k > 65_536 {
-        bail!("RaptorQ symbol count k={k} exceeds maximum allowed (65536)");
+    if k > RQ_MAX_K {
+        bail!("RaptorQ symbol count k={k} exceeds maximum allowed ({RQ_MAX_K})");
     }
 
     let mut padded_data = data.to_vec();
@@ -288,8 +290,8 @@ pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result
         bail!("Invalid RaptorQ decoding parameters: original_count={original_count}, mtu={mtu}");
     }
     let k = original_count.div_ceil(mtu as usize);
-    if k > 65_536 {
-        bail!("RaptorQ symbol count k={k} exceeds maximum allowed (65536)");
+    if k > RQ_MAX_K {
+        bail!("RaptorQ symbol count k={k} exceeds maximum allowed ({RQ_MAX_K})");
     }
 
     // Standard HQFBP alignment is 1-4. Python uses 1 by default often.
@@ -323,8 +325,12 @@ pub fn rq_decode(packets: Vec<Bytes>, original_count: usize, mtu: u16) -> Result
 
         let decoded =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decoder.decode(packet)));
-        if let Ok(Some(res)) = decoded {
-            return Ok(res);
+        match decoded {
+            Ok(Some(res)) => return Ok(res),
+            Ok(None) => {}
+            Err(_) => {
+                bail!("RaptorQ decoder panicked on corrupted packet");
+            }
         }
     }
     bail!("RaptorQ decoding failed: insufficient symbols")

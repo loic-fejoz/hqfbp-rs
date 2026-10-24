@@ -337,6 +337,13 @@ impl Header {
 
         m
     }
+
+    /// Returns true if this header denotes an HQFBP Announcement frame.
+    pub fn is_announcement(&self) -> bool {
+        self.media_type()
+            .is_some_and(|mt| mt.to_mime() == "application/vnd.hqfbp+cbor")
+            || self.content_type.as_deref() == Some("application/vnd.hqfbp+cbor")
+    }
 }
 
 fn get_rs_re() -> &'static Regex {
@@ -476,11 +483,18 @@ impl TryFrom<&str> for ContentEncoding {
             }
             Ok(ContentEncoding::ReedSolomon(n, k))
         } else if let Some(m) = get_rq_re().captures(s) {
-            let len = m[1].parse()?;
+            let len: usize = m[1].parse()?;
             let mtu = m[2].parse()?;
             let rep = m[3].parse()?;
             if len == 0 || mtu == 0 {
                 bail!("Invalid RaptorQ parameters: len={len}, mtu={mtu}");
+            }
+            let k = len.div_ceil(mtu as usize);
+            if k > crate::codec::RQ_MAX_K {
+                bail!(
+                    "RaptorQ symbol count k={k} exceeds maximum allowed ({})",
+                    crate::codec::RQ_MAX_K
+                );
             }
             Ok(ContentEncoding::RaptorQ(len, mtu, rep))
         } else if let Some(m) = get_rq_dyn_re().captures(s) {
@@ -667,13 +681,9 @@ impl<C> Encode<C> for EncodingList {
         e: &mut Encoder<W>,
         _ctx: &mut C,
     ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        let filtered: Vec<_> = self
-            .0
-            .iter()
-            .filter(|e| !matches!(e, ContentEncoding::Chunk(_)))
-            .collect();
-        if filtered.len() == 1 {
-            match filtered[0] {
+        let items = &self.0;
+        if items.len() == 1 {
+            match &items[0] {
                 ContentEncoding::OtherString(s) => {
                     e.str(s)?;
                 }
@@ -686,13 +696,11 @@ impl<C> Encode<C> for EncodingList {
                     }
                 }
             }
-        } else if filtered.is_empty() {
-            // If all were chunks, it becomes identity? Or just omit.
-            // Usually there's at least 'h'.
+        } else if items.is_empty() {
             e.i8(0)?; // identity
         } else {
-            e.array(filtered.len() as u64)?;
-            for item in filtered {
+            e.array(items.len() as u64)?;
+            for item in items {
                 let i: i8 = item.clone().into();
                 if i != 127 {
                     e.i8(i)?;

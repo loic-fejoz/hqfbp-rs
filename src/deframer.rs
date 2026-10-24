@@ -1,5 +1,5 @@
 use crate::codec::*;
-use crate::{ContentEncoding, EncodingList, Header, MediaType, unpack};
+use crate::{ContentEncoding, EncodingList, Header, unpack};
 use anyhow::{Result, bail};
 use bytes::Bytes;
 use std::collections::{HashMap, VecDeque};
@@ -25,8 +25,9 @@ pub enum Event {
 pub struct Deframer {
     events: VecDeque<Event>,
     sessions: HashMap<(Option<String>, u32), Session>,
-    announcements: HashMap<(Option<String>, u32), Vec<ContentEncoding>>,
+    announcements: HashMap<(Option<String>, u32), (Vec<ContentEncoding>, std::time::Instant)>,
     peer_encodings: HashMap<String, Vec<ContentEncoding>>,
+    completed_messages: VecDeque<((Option<String>, u32), std::time::Instant)>,
     not_yet_decoded: Vec<Bytes>,
 }
 
@@ -69,6 +70,8 @@ const MAX_SESSIONS: usize = 128;
 const MAX_CHUNKS_PER_SESSION: usize = 16_384;
 const MAX_ANNOUNCEMENTS: usize = 128;
 
+const MAX_COMPLETED_MESSAGES: usize = 1024;
+
 impl Default for Deframer {
     fn default() -> Self {
         Self::new()
@@ -82,6 +85,7 @@ impl Deframer {
             sessions: HashMap::new(),
             announcements: HashMap::new(),
             peer_encodings: HashMap::new(),
+            completed_messages: VecDeque::new(),
             not_yet_decoded: Vec::new(),
         }
     }
@@ -123,6 +127,16 @@ impl Deframer {
             log::info!("Session {:?} timed out after {:?}; purging", key, timeout);
             self.sessions.remove(key);
         }
+
+        // Also clean up completed_messages cache
+        while let Some((_, time)) = self.completed_messages.front() {
+            if now.duration_since(*time) >= timeout {
+                self.completed_messages.pop_front();
+            } else {
+                break;
+            }
+        }
+
         expired
     }
 
@@ -179,9 +193,8 @@ impl Deframer {
         };
 
         if !to_apply.is_empty() {
-            let mut to_apply_rev = to_apply.clone();
-            to_apply_rev.reverse();
-            self.apply_decodings(current_payload, &to_apply_rev, Some(header), false)
+            // apply_decodings already iterates backwards (.iter().rev()) over the encoding list
+            self.apply_decodings(current_payload, &to_apply, Some(header), false)
         } else {
             Ok((current_payload, 0))
         }
@@ -203,7 +216,7 @@ impl Deframer {
             let ce_list = if let Some(mid) = target_id {
                 self.announcements
                     .get(&(src_c.clone(), mid))
-                    .cloned()
+                    .map(|(encs, _)| encs.clone())
                     .or_else(|| {
                         src_c
                             .as_ref()
@@ -228,9 +241,7 @@ impl Deframer {
                         if let Ok((mut h2, p2)) = unpack(clean_pdu.clone()) {
                             self.strip_post_h_encodings(&mut h2);
                             // Check for announcement
-                            let is_ann = h2.media_type()
-                                == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string()))
-                                || h2.media_type() == Some(MediaType::Format(60));
+                            let is_ann = h2.is_announcement();
                             if is_ann {
                                 log::debug!("Phase 1 decoded Announcement!");
                             }
@@ -245,9 +256,7 @@ impl Deframer {
                         }
                     }
                     Err(e) => {
-                        let is_ann = h_peek.media_type()
-                            == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string()))
-                            || h_peek.media_type() == Some(MediaType::Format(60));
+                        let is_ann = h_peek.is_announcement();
                         if is_ann {
                             log::debug!("Phase 1 Announcement failed: {e}");
                         }
@@ -263,11 +272,15 @@ impl Deframer {
         // 2. Phase 2: Heuristic Recovery
         if header.is_none() || payload.is_none() {
             let mut candidate_encs: Vec<Vec<ContentEncoding>> = Vec::new();
-            for ann in self.announcements.values() {
-                candidate_encs.push(ann.clone());
+            for (ann, _) in self.announcements.values() {
+                if !candidate_encs.contains(ann) {
+                    candidate_encs.push(ann.clone());
+                }
             }
             for peer_enc in self.peer_encodings.values() {
-                candidate_encs.push(peer_enc.clone());
+                if !candidate_encs.contains(peer_enc) {
+                    candidate_encs.push(peer_enc.clone());
+                }
             }
             let mut reclaimed_any = false;
 
@@ -498,9 +511,7 @@ impl Deframer {
         let src_callsign = header.src_callsign.clone();
 
         // 3. Dispatch Event and Handle Reassembly
-        let is_ann = header.media_type()
-            == Some(MediaType::Type("application/vnd.hqfbp+cbor".to_string()))
-            || header.media_type() == Some(MediaType::Format(60));
+        let is_ann = header.is_announcement();
 
         if is_ann {
             let mut a_payload = payload.clone();
@@ -532,6 +543,20 @@ impl Deframer {
             return;
         };
         let session_key = (src_callsign.clone(), orig_id);
+
+        // Check if this message was already completed (deduplication)
+        if self
+            .completed_messages
+            .iter()
+            .any(|(k, _)| k == &session_key)
+        {
+            log::debug!(
+                "PDU belongs to already completed message {:?}; skipping reassembly",
+                session_key
+            );
+            return;
+        }
+
         let total_chunks = header.total_chunks.unwrap_or(1);
         let chunk_id = header.chunk_id.unwrap_or(0);
 
@@ -544,15 +569,20 @@ impl Deframer {
             payload.len()
         );
 
-        if !self.sessions.contains_key(&session_key)
-            && self.sessions.len() >= MAX_SESSIONS
-            && let Some(old_key) = self.sessions.keys().next().cloned()
-        {
-            log::warn!(
-                "Deframer reached max concurrent sessions ({MAX_SESSIONS}); evicting oldest {:?}",
-                old_key
-            );
-            self.sessions.remove(&old_key);
+        if !self.sessions.contains_key(&session_key) && self.sessions.len() >= MAX_SESSIONS {
+            // Evict session with the oldest last_activity
+            if let Some(oldest_key) = self
+                .sessions
+                .iter()
+                .min_by_key(|(_, s)| s.last_activity)
+                .map(|(k, _)| k.clone())
+            {
+                log::warn!(
+                    "Deframer reached max concurrent sessions ({MAX_SESSIONS}); evicting oldest {:?}",
+                    oldest_key
+                );
+                self.sessions.remove(&oldest_key);
+            }
         }
 
         let session = self
@@ -588,26 +618,26 @@ impl Deframer {
         let completed = if session.chunks.len() as u32 == session.total_chunks {
             true
         } else {
-            // Check for RaptorQ in pre-boundary encodings for early reassembly
-            let mut rq_k = None;
+            // Check for RaptorQ or LT in pre-boundary encodings for early reassembly
+            let mut fountain_k = None;
             for h in &session.headers {
                 if let Some(ce) = &h.content_encoding {
                     let (pre, _, _) = split_encs(&ce.0);
                     for enc in pre {
                         if let ContentEncoding::RaptorQ(rq_len, mtu, _) = enc {
-                            rq_k = Some(rq_len.div_ceil(mtu as usize));
+                            fountain_k = Some(rq_len.div_ceil(mtu as usize));
                             break;
                         } else if let ContentEncoding::LT(len, mtu, _) = enc {
-                            rq_k = Some(len.div_ceil(mtu as usize));
+                            fountain_k = Some(len.div_ceil(mtu as usize));
                             break;
                         }
                     }
                 }
-                if rq_k.is_some() {
+                if fountain_k.is_some() {
                     break;
                 }
             }
-            if let Some(k) = rq_k {
+            if let Some(k) = fountain_k {
                 session.chunks.len() >= k
             } else {
                 false
@@ -615,7 +645,7 @@ impl Deframer {
         };
 
         if completed {
-            self.complete_message(session_key);
+            self.try_complete_message(&session_key);
         }
     }
 
@@ -629,12 +659,17 @@ impl Deframer {
         {
             if !self.announcements.contains_key(&(src.clone(), mid))
                 && self.announcements.len() >= MAX_ANNOUNCEMENTS
-                && let Some(old_key) = self.announcements.keys().next().cloned()
+                && let Some(oldest_key) = self
+                    .announcements
+                    .iter()
+                    .min_by_key(|(_, (_, t))| *t)
+                    .map(|(k, _)| k.clone())
             {
-                self.announcements.remove(&old_key);
+                self.announcements.remove(&oldest_key);
             }
             let ice = ce_to_list(&ce);
-            self.announcements.insert((src, mid), ice);
+            self.announcements
+                .insert((src, mid), (ice, std::time::Instant::now()));
         }
     }
 
@@ -747,9 +782,9 @@ impl Deframer {
         Ok((data, quality))
     }
 
-    fn complete_message(&mut self, key: (Option<String>, u32)) {
-        let Some(session) = self.sessions.remove(&key) else {
-            return;
+    fn try_complete_message(&mut self, key: &(Option<String>, u32)) -> bool {
+        let Some(session) = self.sessions.get(key) else {
+            return false;
         };
 
         let mut merged = session.header_from_first();
@@ -818,10 +853,13 @@ impl Deframer {
         {
             Ok((d, _)) => d,
             Err(e) => {
-                log::debug!("complete_message apply_decodings_multi failed: {e}");
-                return;
+                log::debug!("try_complete_message apply_decodings_multi failed: {e}");
+                return false;
             }
         };
+
+        // If successful, now remove the session
+        self.sessions.remove(key);
 
         // 2. Handle nesting (if the reassembled content is another HQFBP PDU)
         if let Ok((h_inner, p_inner)) = unpack(data.clone())
@@ -876,9 +914,16 @@ impl Deframer {
             payload: data,
         }));
 
+        if self.completed_messages.len() >= MAX_COMPLETED_MESSAGES {
+            self.completed_messages.pop_front();
+        }
+        self.completed_messages
+            .push_back((key.clone(), std::time::Instant::now()));
+
         // When a message is completed, we should clear the heuristic reassembly buffer
         // to avoid "poisoning" subsequent messages with fragments from this one.
         self.not_yet_decoded = Vec::new();
+        true
     }
 }
 

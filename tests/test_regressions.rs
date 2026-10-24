@@ -389,3 +389,200 @@ fn test_rq_fuzz_crash() {
     let b = vec![bytes::Bytes::copy_from_slice(payload)];
     let _ = hqfbp_rs::codec::rq_decode(b, payload.len().max(1), 64);
 }
+
+#[test]
+fn test_p0_sec1_rq_crafted_k_too_large() {
+    use hqfbp_rs::{EncodingList, Header, pack};
+
+    // Crafted header with k = 60000 > RQ_MAX_K (56403)
+    let h = Header {
+        message_id: Some(1),
+        src_callsign: Some("EVIL".into()),
+        content_encoding: Some(EncodingList(vec![
+            ContentEncoding::RaptorQ(60000, 1, 0),
+            ContentEncoding::H,
+        ])),
+        ..Default::default()
+    };
+    let pdu = pack(&h, &[0u8; 8]).unwrap();
+    let mut deframer = Deframer::new();
+    // Must not panic!
+    deframer.receive_bytes(&pdu);
+}
+
+#[test]
+fn test_p0_cor1_application_cbor_not_swallowed() {
+    use hqfbp_rs::MediaType;
+    use hqfbp_rs::generator::PDUGenerator;
+
+    let payload = b"\xa1\x01\x02".to_vec(); // Valid CBOR map {1: 2}
+    let mut generator = PDUGenerator::new(
+        Some("F4TEST".into()),
+        None,
+        Some(vec![ContentEncoding::H]),
+        None,
+        1,
+    );
+    let pdus = generator
+        .generate(&payload, Some(MediaType::Type("application/cbor".into())))
+        .unwrap();
+
+    let mut deframer = Deframer::new();
+    for p in pdus {
+        deframer.receive_bytes(&p);
+    }
+
+    let mut recovered = None;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            recovered = Some(me.payload.to_vec());
+        }
+    }
+    assert_eq!(
+        recovered,
+        Some(payload),
+        "application/cbor message must be delivered, not swallowed as announcement"
+    );
+}
+
+#[test]
+fn test_p0_cor2_lt_session_not_destroyed_on_early_fail() {
+    use hqfbp_rs::generator::PDUGenerator;
+
+    let data: Vec<u8> = (0..1000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let mut generator = PDUGenerator::new(
+        Some("F4TEST".into()),
+        None,
+        Some(vec![ContentEncoding::LT(1000, 100, 30), ContentEncoding::H]),
+        None,
+        1,
+    );
+    let pdus = generator.generate(&data, None).unwrap();
+    assert_eq!(pdus.len(), 40); // 10 source + 30 repair
+
+    // Drop the first 3 systematic chunks so peeling needs more than k symbols to resolve
+    let mut deframer = Deframer::new();
+    for (i, p) in pdus.iter().enumerate() {
+        if i < 3 {
+            continue; // drop chunks 0, 1, 2
+        }
+        deframer.receive_bytes(p);
+    }
+
+    let mut recovered = None;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            recovered = Some(me.payload.to_vec());
+        }
+    }
+    assert_eq!(
+        recovered,
+        Some(data),
+        "LT session should survive early decode failure and decode once enough repair packets arrive"
+    );
+}
+
+#[test]
+fn test_p0_cor3_kiss_decoder_shared_and_leading_fend() {
+    use hqfbp_rs::kiss::{KissDecoder, encode_kiss_frame};
+
+    let pdu1 = b"PDU1_DATA";
+    let pdu2 = b"PDU2_DATA";
+    let f1 = encode_kiss_frame(pdu1);
+    let f2 = encode_kiss_frame(pdu2);
+
+    // 1. Leading double FEND: C0 C0 00 ... C0
+    let mut leading_fend = vec![0xC0];
+    leading_fend.extend_from_slice(&f1);
+
+    let mut decoder = KissDecoder::new();
+    let frames: Vec<_> = leading_fend
+        .iter()
+        .filter_map(|&b| decoder.process_byte(b))
+        .collect();
+    assert_eq!(frames.len(), 1, "Leading FEND must not swallow the frame");
+    assert_eq!(&frames[0][1..], pdu1);
+
+    // 2. Shared FEND between frames: f1 with last C0 shared as first C0 of f2
+    let mut shared_stream = f1;
+    shared_stream.extend_from_slice(&f2[1..]); // omit leading C0 of f2
+
+    let mut decoder2 = KissDecoder::new();
+    let frames2: Vec<_> = shared_stream
+        .iter()
+        .filter_map(|&b| decoder2.process_byte(b))
+        .collect();
+    assert_eq!(frames2.len(), 2, "Shared FEND must deliver both frames");
+    assert_eq!(&frames2[0][1..], pdu1);
+    assert_eq!(&frames2[1][1..], pdu2);
+}
+
+#[test]
+fn test_p0_cor4_chunk_encodings_roundtrip() {
+    use hqfbp_rs::generator::PDUGenerator;
+
+    let data: Vec<u8> = (0..1000u32).map(|i| (i * 13 % 251) as u8).collect();
+    let mut generator = PDUGenerator::new(
+        Some("F4TEST".into()),
+        None,
+        Some(vec![
+            ContentEncoding::Chunk(300),
+            ContentEncoding::Deflate,
+            ContentEncoding::Crc32,
+            ContentEncoding::H,
+        ]),
+        None,
+        1,
+    );
+    let pdus = generator.generate(&data, None).unwrap();
+    assert!(pdus.len() > 1, "Data should be chunked into multiple PDUs");
+
+    let mut deframer = Deframer::new();
+    for p in pdus {
+        deframer.receive_bytes(&p);
+    }
+
+    let mut recovered = None;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            recovered = Some(me.payload.to_vec());
+        }
+    }
+    assert_eq!(
+        recovered,
+        Some(data),
+        "Per-chunk deflate+crc32 must be successfully deframed and reassembled"
+    );
+}
+
+#[test]
+fn test_p0_cor5_deduplication_repeat() {
+    use hqfbp_rs::generator::PDUGenerator;
+
+    let data = b"Repeat Test Payload".to_vec();
+    let mut generator = PDUGenerator::new(
+        Some("F4TEST".into()),
+        None,
+        Some(vec![ContentEncoding::H, ContentEncoding::Repeat(3)]),
+        None,
+        1,
+    );
+    let pdus = generator.generate(&data, None).unwrap();
+    assert_eq!(pdus.len(), 3);
+
+    let mut deframer = Deframer::new();
+    for p in pdus {
+        deframer.receive_bytes(&p);
+    }
+
+    let mut count = 0;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(_) = ev {
+            count += 1;
+        }
+    }
+    assert_eq!(
+        count, 1,
+        "Completed message must be deduplicated across repeated/duplicate PDUs"
+    );
+}
