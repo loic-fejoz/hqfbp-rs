@@ -64,11 +64,10 @@ mod tests {
                             }
                         }
                     }
-                    Event::Message(me) => {
-                        if me.payload.len() == data.len() {
-                            recovered_data = Some(me.payload.to_vec());
-                        }
+                    Event::Message(me) if me.payload.len() == data.len() => {
+                        recovered_data = Some(me.payload.to_vec());
                     }
+                    _ => {}
                 }
             }
         }

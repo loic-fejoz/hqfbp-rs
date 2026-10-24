@@ -17,9 +17,26 @@ pub struct MessageEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionExpiredEvent {
+    pub src_callsign: Option<String>,
+    pub original_message_id: u32,
+    pub received_chunks: usize,
+    pub total_chunks: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct DuplicateEvent {
+    pub src_callsign: Option<String>,
+    pub original_message_id: u32,
+    pub chunk_id: u32,
+}
+
+#[derive(Debug, Clone)]
 pub enum Event {
     PDU(PDUEvent),
     Message(MessageEvent),
+    SessionExpired(SessionExpiredEvent),
+    Duplicate(DuplicateEvent),
 }
 
 pub struct Deframer {
@@ -125,7 +142,15 @@ impl Deframer {
         }
         for key in &expired {
             log::info!("Session {:?} timed out after {:?}; purging", key, timeout);
-            self.sessions.remove(key);
+            if let Some(s) = self.sessions.remove(key) {
+                self.events
+                    .push_back(Event::SessionExpired(SessionExpiredEvent {
+                        src_callsign: key.0.clone(),
+                        original_message_id: key.1,
+                        received_chunks: s.chunks.len(),
+                        total_chunks: s.total_chunks,
+                    }));
+            }
         }
 
         // Also clean up completed_messages cache
@@ -350,28 +375,9 @@ impl Deframer {
                         Ok((mut h2, p2)) => {
                             self.strip_post_h_encodings(&mut h2);
                             if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
-                                let src_c = h2.src_callsign.clone();
-                                let orig_id = h2.original_message_id.or(h2.message_id).unwrap_or(0);
-                                let session_key = (src_c, orig_id);
-                                let chunk_id = h2.chunk_id.unwrap_or(0);
                                 let new_quality = q + q_gain;
-
-                                let already_had_better =
-                                    if let Some(s) = self.sessions.get(&session_key) {
-                                        if let Some(existing) = s.chunks.get(&chunk_id) {
-                                            existing.1 >= new_quality
-                                        } else {
-                                            false
-                                        }
-                                    } else {
-                                        false
-                                    };
-
                                 self.process_pdu(h2, p3, new_quality);
                                 reclaimed_any = true;
-                                if !already_had_better {
-                                    self.not_yet_decoded = Vec::new();
-                                }
                             }
                         }
                         Err(e) => {
@@ -554,11 +560,30 @@ impl Deframer {
                 "PDU belongs to already completed message {:?}; skipping reassembly",
                 session_key
             );
+            self.events.push_back(Event::Duplicate(DuplicateEvent {
+                src_callsign: session_key.0,
+                original_message_id: session_key.1,
+                chunk_id: header.chunk_id.unwrap_or(0),
+            }));
             return;
         }
 
         let total_chunks = header.total_chunks.unwrap_or(1);
         let chunk_id = header.chunk_id.unwrap_or(0);
+
+        // COR-9: Validate chunking bounds
+        if total_chunks == 0 {
+            log::warn!("PDU specifies total_chunks == 0; dropping invalid chunk");
+            return;
+        }
+        if chunk_id >= total_chunks {
+            log::warn!(
+                "PDU chunk_id {} >= total_chunks {}; dropping out-of-bounds chunk",
+                chunk_id,
+                total_chunks
+            );
+            return;
+        }
 
         log::debug!(
             "apply_pdu mid={:?}, ce={:?}, total={}, chunk={}, p_len={}",
@@ -861,8 +886,15 @@ impl Deframer {
         // If successful, now remove the session
         self.sessions.remove(key);
 
-        // 2. Handle nesting (if the reassembled content is another HQFBP PDU)
-        if let Ok((h_inner, p_inner)) = unpack(data.clone())
+        // 2. Handle nesting only if the payload is explicitly marked as nested HQFBP CBOR
+        let is_nested_hqfbp = merged.media_type()
+            == Some(crate::MediaType::Type(
+                "application/vnd.hqfbp+cbor".to_string(),
+            ))
+            || merged.content_type.as_deref() == Some("application/vnd.hqfbp+cbor");
+
+        if is_nested_hqfbp
+            && let Ok((h_inner, p_inner)) = unpack(data.clone())
             && h_inner.message_id.is_some()
         {
             let inner_ce = h_inner
@@ -920,9 +952,6 @@ impl Deframer {
         self.completed_messages
             .push_back((key.clone(), std::time::Instant::now()));
 
-        // When a message is completed, we should clear the heuristic reassembly buffer
-        // to avoid "poisoning" subsequent messages with fragments from this one.
-        self.not_yet_decoded = Vec::new();
         true
     }
 }

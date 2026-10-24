@@ -311,11 +311,10 @@ fn main() -> Result<()> {
                         pdu_accepted = true;
                         metrics.add_residual_errors(expected_payload, &pe.payload);
                     }
-                    Event::Message(me) => {
-                        if me.payload.starts_with(&source_data) {
-                            recovered = true;
-                        }
+                    Event::Message(me) if me.payload.starts_with(&source_data) => {
+                        recovered = true;
                     }
+                    _ => {}
                 }
             }
 

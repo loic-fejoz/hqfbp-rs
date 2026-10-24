@@ -187,7 +187,7 @@ pub fn scr_xor(data: &[u8], poly_mask: u64) -> Vec<u8> {
 }
 
 pub fn rs_encode(data: &[u8], n: usize, k: usize) -> Result<Vec<u8>> {
-    if n > 255 || k == 0 || k > n {
+    if n > 255 || k == 0 || k >= n {
         bail!("Invalid RS parameters: n={n}, k={k}");
     }
     let ecc_len = n - k;
@@ -512,15 +512,23 @@ pub fn conv_decode(data: &[u8], k: usize, rate: &str) -> Result<(Vec<u8>, usize)
         }
     }
 
-    // Find best ending state
-    let mut best_state = 0;
-    let mut min_m = metrics[0];
-    for (s, &m) in metrics.iter().enumerate() {
-        if m < min_m {
-            min_m = m;
-            best_state = s;
+    // Because conv_encode appends 6 zero tail bits to flush the K=7 shift register,
+    // the encoder is guaranteed to end in state 0 if no unrecoverable errors occurred.
+    // If state 0 has a valid metric, force best_state = 0.
+    let best_state = if metrics[0] < INF {
+        0
+    } else {
+        let mut min_s = 0;
+        let mut min_m = metrics[0];
+        for (s, &m) in metrics.iter().enumerate() {
+            if m < min_m {
+                min_m = m;
+                min_s = s;
+            }
         }
-    }
+        min_s
+    };
+    let min_m = metrics[best_state];
 
     // Traceback
     let mut decoded_bits = Vec::with_capacity(num_pairs);

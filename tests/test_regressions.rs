@@ -586,3 +586,116 @@ fn test_p0_cor5_deduplication_repeat() {
         "Completed message must be deduplicated across repeated/duplicate PDUs"
     );
 }
+
+#[test]
+fn test_p1_cor6_nested_cbor_payload_not_confused_as_inner_pdu() {
+    use hqfbp_rs::generator::PDUGenerator;
+
+    // A payload that happens to be a valid CBOR map with key 0, e.g. {0: 5, "hello": "world"}
+    // In CBOR: 0xa2 0x00 0x05 0x65 "hello" 0x65 "world"
+    let mut payload = vec![0xa2, 0x00, 0x05];
+    payload.extend_from_slice(b"\x65hello\x65world");
+
+    let mut generator = PDUGenerator::new(
+        Some("F4NEST".into()),
+        None,
+        Some(vec![ContentEncoding::H]),
+        None,
+        1,
+    );
+    let pdus = generator.generate(&payload, None).unwrap();
+
+    let mut deframer = Deframer::new();
+    for p in pdus {
+        deframer.receive_bytes(&p);
+    }
+
+    let mut recovered = None;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            recovered = Some(me.payload.to_vec());
+        }
+    }
+    assert_eq!(
+        recovered,
+        Some(payload),
+        "Raw CBOR payload with key 0 must not be stripped as a nested HQFBP PDU unless explicit"
+    );
+}
+
+#[test]
+fn test_p1_cor9_reject_invalid_chunk_bounds() {
+    use hqfbp_rs::{Header, pack};
+
+    let mut deframer = Deframer::new();
+
+    // 1. total_chunks = 0
+    let h0 = Header {
+        message_id: Some(10),
+        src_callsign: Some("F1ABC".into()),
+        total_chunks: Some(0),
+        chunk_id: Some(0),
+        ..Default::default()
+    };
+    let pdu0 = pack(&h0, b"data0").unwrap();
+    deframer.receive_bytes(&pdu0);
+    assert_eq!(deframer.active_sessions_count(), 0);
+
+    // 2. chunk_id >= total_chunks (e.g. chunk 2 of 2)
+    let h1 = Header {
+        message_id: Some(11),
+        src_callsign: Some("F1ABC".into()),
+        total_chunks: Some(2),
+        chunk_id: Some(2),
+        ..Default::default()
+    };
+    let pdu1 = pack(&h1, b"data1").unwrap();
+    deframer.receive_bytes(&pdu1);
+    assert_eq!(deframer.active_sessions_count(), 0);
+}
+
+#[test]
+fn test_p1_cor13_rs_validation() {
+    // k == n must be rejected
+    assert!(hqfbp_rs::codec::rs_encode(b"hello", 255, 255).is_err());
+    assert!(hqfbp_rs::codec::rs_decode(b"hello", 255, 255).is_err());
+}
+
+#[test]
+fn test_p1_dtn1_session_expired_event() {
+    use hqfbp_rs::{Header, pack};
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    let mut deframer = Deframer::new();
+    let h = Header {
+        message_id: Some(20),
+        original_message_id: Some(20),
+        src_callsign: Some("F1DTN".into()),
+        total_chunks: Some(2),
+        chunk_id: Some(0),
+        ..Default::default()
+    };
+    let pdu = pack(&h, b"chunk0").unwrap();
+    deframer.receive_bytes(&pdu);
+
+    // Consume PDU event
+    let _ = deframer.next_event();
+
+    sleep(Duration::from_millis(15));
+    let expired = deframer.cleanup_expired(Duration::from_millis(10));
+    assert_eq!(expired, vec![(Some("F1DTN".into()), 20)]);
+
+    // Check that SessionExpired event was queued
+    let mut saw_expired_event = false;
+    while let Some(ev) = deframer.next_event() {
+        if let Event::SessionExpired(e) = ev {
+            assert_eq!(e.src_callsign.as_deref(), Some("F1DTN"));
+            assert_eq!(e.original_message_id, 20);
+            assert_eq!(e.received_chunks, 1);
+            assert_eq!(e.total_chunks, 2);
+            saw_expired_event = true;
+        }
+    }
+    assert!(saw_expired_event);
+}

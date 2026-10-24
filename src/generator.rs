@@ -40,7 +40,7 @@ impl PDUGenerator {
 
     fn get_next_msg_id(&mut self) -> u32 {
         let id = self.next_msg_id;
-        self.next_msg_id += 1;
+        self.next_msg_id = self.next_msg_id.wrapping_add(1);
         id
     }
 
@@ -145,7 +145,7 @@ impl PDUGenerator {
                     let msg_id = if idx == 0 {
                         let id = data_orig_id;
                         if self.next_msg_id == id {
-                            self.next_msg_id += 1;
+                            self.next_msg_id = self.next_msg_id.wrapping_add(1);
                         }
                         id
                     } else {
