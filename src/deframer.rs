@@ -39,13 +39,17 @@ pub enum Event {
     Duplicate(DuplicateEvent),
 }
 
+type AnnouncementKey = (Option<String>, u32);
+type AnnouncementEntry = (Vec<ContentEncoding>, std::time::Instant, u64);
+
 pub struct Deframer {
     events: VecDeque<Event>,
     sessions: HashMap<(Option<String>, u32), Session>,
-    announcements: HashMap<(Option<String>, u32), (Vec<ContentEncoding>, std::time::Instant)>,
+    announcements: HashMap<AnnouncementKey, AnnouncementEntry>,
     peer_encodings: HashMap<String, Vec<ContentEncoding>>,
     completed_messages: VecDeque<((Option<String>, u32), std::time::Instant)>,
-    not_yet_decoded: Vec<Bytes>,
+    not_yet_decoded: Vec<(Bytes, u64)>,
+    rx_seq: u64,
 }
 
 struct Session {
@@ -82,7 +86,37 @@ fn find_last_splitting_index(encs: &[ContentEncoding]) -> Option<usize> {
     encs.iter().rposition(is_splitting_encoding)
 }
 
+fn is_post_combiner(e: &ContentEncoding) -> bool {
+    matches!(
+        e,
+        ContentEncoding::RaptorQ(_, _, _)
+            | ContentEncoding::RaptorQDynamic(_, _)
+            | ContentEncoding::LT(_, _, _)
+            | ContentEncoding::LTDynamic(_, _)
+            | ContentEncoding::Chunk(_)
+            | ContentEncoding::Repeat(_)
+            | ContentEncoding::H
+    )
+}
+
+/// Returns true if a PDU unpacked from a post-H `Chunk(_)` pipeline is still
+/// missing trailing fragments according to its `Payload-Size` header field.
+fn is_incomplete_post_h_fragment(
+    header: &Header,
+    payload_len: usize,
+    post_encs: &[ContentEncoding],
+) -> bool {
+    let has_post_chunk = post_encs
+        .iter()
+        .any(|e| matches!(e, ContentEncoding::Chunk(_)));
+    if has_post_chunk && let Some(expected) = header.payload_size {
+        return (payload_len as u64) < expected;
+    }
+    false
+}
+
 const MAX_NOT_YET_DECODED: usize = 256;
+const MAX_COMBINER_SUFFIX_TRIES: usize = 64;
 const MAX_SESSIONS: usize = 128;
 const MAX_CHUNKS_PER_SESSION: usize = 16_384;
 const MAX_ANNOUNCEMENTS: usize = 128;
@@ -104,6 +138,7 @@ impl Deframer {
             peer_encodings: HashMap::new(),
             completed_messages: VecDeque::new(),
             not_yet_decoded: Vec::new(),
+            rx_seq: 0,
         }
     }
 
@@ -226,6 +261,9 @@ impl Deframer {
     }
 
     pub fn receive_bytes(&mut self, data: &[u8]) {
+        self.rx_seq = self.rx_seq.wrapping_add(1);
+        let current_seq = self.rx_seq;
+
         let b_data = Bytes::copy_from_slice(data);
         let mut header: Option<Header> = None;
         let mut payload: Option<Bytes> = None;
@@ -241,7 +279,7 @@ impl Deframer {
             let ce_list = if let Some(mid) = target_id {
                 self.announcements
                     .get(&(src_c.clone(), mid))
-                    .map(|(encs, _)| encs.clone())
+                    .map(|(encs, _, _)| encs.clone())
                     .or_else(|| {
                         src_c
                             .as_ref()
@@ -264,19 +302,48 @@ impl Deframer {
                 match self.apply_decodings(b_data.clone(), &post, Some(h_peek), false) {
                     Ok((clean_pdu, q)) => {
                         if let Ok((mut h2, p2)) = unpack(clean_pdu.clone()) {
-                            self.strip_post_h_encodings(&mut h2);
-                            // Check for announcement
-                            let is_ann = h2.is_announcement();
-                            if is_ann {
-                                log::debug!("Phase 1 decoded Announcement!");
-                            }
+                            if is_incomplete_post_h_fragment(&h2, p2.len(), &post) {
+                                // Register transparent post-H chunked pipeline so Phase 2b can reassemble fragments
+                                if let Some(mid) = h2.original_message_id.or(h2.message_id) {
+                                    let key = (h2.src_callsign.clone(), mid);
+                                    let already_completed =
+                                        self.completed_messages.iter().any(|(k, _)| k == &key);
+                                    if !already_completed && !self.announcements.contains_key(&key)
+                                    {
+                                        if self.announcements.len() >= MAX_ANNOUNCEMENTS
+                                            && let Some(oldest_key) = self
+                                                .announcements
+                                                .iter()
+                                                .min_by_key(|(_, (_, t, _))| *t)
+                                                .map(|(k, _)| k.clone())
+                                        {
+                                            self.announcements.remove(&oldest_key);
+                                        }
+                                        self.announcements.insert(
+                                            key,
+                                            (
+                                                ce.clone(),
+                                                std::time::Instant::now(),
+                                                current_seq.saturating_sub(1),
+                                            ),
+                                        );
+                                    }
+                                }
+                            } else {
+                                self.strip_post_h_encodings(&mut h2);
+                                // Check for announcement
+                                let is_ann = h2.is_announcement();
+                                if is_ann {
+                                    log::debug!("Phase 1 decoded Announcement!");
+                                }
 
-                            if let Ok((p3, q_gain)) =
-                                self.apply_pdu_level_decodings(&h2, p2.clone())
-                            {
-                                header = Some(h2);
-                                payload = Some(p3);
-                                pdu_quality = q + q_gain;
+                                if let Ok((p3, q_gain)) =
+                                    self.apply_pdu_level_decodings(&h2, p2.clone())
+                                {
+                                    header = Some(h2);
+                                    payload = Some(p3);
+                                    pdu_quality = q + q_gain;
+                                }
                             }
                         }
                     }
@@ -296,20 +363,30 @@ impl Deframer {
 
         // 2. Phase 2: Heuristic Recovery
         if header.is_none() || payload.is_none() {
-            let mut candidate_encs: Vec<Vec<ContentEncoding>> = Vec::new();
-            for (ann, _) in self.announcements.values() {
-                if !candidate_encs.contains(ann) {
-                    candidate_encs.push(ann.clone());
+            // Try newest announcements first, then peer_encodings
+            let mut ann_entries: Vec<(Vec<ContentEncoding>, u64)> = self
+                .announcements
+                .values()
+                .map(|(encs, _, seq)| (encs.clone(), *seq))
+                .collect();
+            ann_entries.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+            let mut candidates: Vec<(Vec<ContentEncoding>, Option<u64>)> = Vec::new();
+            for (encs, seq) in ann_entries {
+                let candidate = (encs, Some(seq));
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
                 }
             }
             for peer_enc in self.peer_encodings.values() {
-                if !candidate_encs.contains(peer_enc) {
-                    candidate_encs.push(peer_enc.clone());
+                let candidate = (peer_enc.clone(), None);
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
                 }
             }
             let mut reclaimed_any = false;
 
-            for ann_encs in candidate_encs {
+            for (ann_encs, min_seq) in candidates {
                 let (_, post, _) = split_encs(&ann_encs);
 
                 // 2a. Try decoding JUST the current packet (Per-PDU FEC)
@@ -317,6 +394,7 @@ impl Deframer {
                 if let Ok((clean_pdu, q)) =
                     self.apply_decodings_multi(vec![b_data.clone()], &post, None, false)
                     && let Ok((mut h2, p2)) = unpack(clean_pdu)
+                    && !is_incomplete_post_h_fragment(&h2, p2.len(), &post)
                 {
                     self.strip_post_h_encodings(&mut h2);
                     if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
@@ -345,48 +423,96 @@ impl Deframer {
                 }
 
                 if single_success {
-                    continue;
+                    break;
                 }
 
                 // If post contains ONLY packet-local encodings (RS, CRC, Scrambler),
                 // group decoding is useless because they would have passed Phase 1 if valid.
                 // We only need to retry group decoding if there are "Combiners" (RQ, Chunk, Repeat).
-                let has_combiner = post.iter().any(|e| {
-                    matches!(
-                        e,
-                        ContentEncoding::RaptorQ(_, _, _)
-                            | ContentEncoding::RaptorQDynamic(_, _)
-                            | ContentEncoding::LT(_, _, _)
-                            | ContentEncoding::LTDynamic(_, _)
-                            | ContentEncoding::Chunk(_)
-                            | ContentEncoding::Repeat(_)
-                            | ContentEncoding::H
-                    )
-                });
+                let Some(last_comb_idx) = post.iter().rposition(is_post_combiner) else {
+                    continue;
+                };
 
-                if !has_combiner {
+                let inner_and_comb = &post[..=last_comb_idx];
+                let outer_per_pkt = &post[last_comb_idx + 1..];
+
+                let mut decoded_entries: Vec<(Option<usize>, Bytes, usize)> = Vec::new();
+                if !outer_per_pkt.is_empty() {
+                    let Ok((b_dec, b_q)) =
+                        self.apply_decodings(b_data.clone(), outer_per_pkt, None, false)
+                    else {
+                        continue;
+                    };
+                    for (nyd_idx, (pkt, pkt_seq)) in self.not_yet_decoded.iter().enumerate() {
+                        if min_seq.is_some_and(|ms| *pkt_seq <= ms) {
+                            continue;
+                        }
+                        if let Ok((d, q)) =
+                            self.apply_decodings(pkt.clone(), outer_per_pkt, None, false)
+                        {
+                            decoded_entries.push((Some(nyd_idx), d, q));
+                        }
+                    }
+                    decoded_entries.push((None, b_dec, b_q));
+                } else {
+                    for (nyd_idx, (pkt, pkt_seq)) in self.not_yet_decoded.iter().enumerate() {
+                        if min_seq.is_some_and(|ms| *pkt_seq <= ms) {
+                            continue;
+                        }
+                        decoded_entries.push((Some(nyd_idx), pkt.clone(), 0));
+                    }
+                    decoded_entries.push((None, b_data.clone(), 0));
+                }
+
+                let min_group_len = match &post[last_comb_idx] {
+                    ContentEncoding::RaptorQ(len, mtu, _) | ContentEncoding::LT(len, mtu, _)
+                        if *mtu > 0 =>
+                    {
+                        len.div_ceil(*mtu as usize).max(2)
+                    }
+                    _ => 2,
+                };
+                if decoded_entries.len() < min_group_len {
                     continue;
                 }
 
-                let mut try_list = self.not_yet_decoded.clone();
-                try_list.push(b_data.clone());
-                match self.apply_decodings_multi(try_list, &post, None, false) {
-                    Ok((clean_pdu, q)) => match unpack(clean_pdu) {
-                        Ok((mut h2, p2)) => {
-                            self.strip_post_h_encodings(&mut h2);
-                            if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
-                                let new_quality = q + q_gain;
-                                self.process_pdu(h2, p3, new_quality);
-                                reclaimed_any = true;
+                let max_start = decoded_entries.len() - min_group_len;
+                let min_start = max_start.saturating_sub(MAX_COMBINER_SUFFIX_TRIES);
+                for start in (min_start..=max_start).rev() {
+                    let window = &decoded_entries[start..];
+                    let window_bytes: Vec<Bytes> =
+                        window.iter().map(|(_, b, _)| b.clone()).collect();
+                    let outer_q: usize = window.iter().map(|(_, _, q)| *q).sum();
+
+                    match self.apply_decodings_multi(window_bytes, inner_and_comb, None, false) {
+                        Ok((clean_pdu, inner_q)) => match unpack(clean_pdu) {
+                            Ok((mut h2, p2)) => {
+                                if is_incomplete_post_h_fragment(&h2, p2.len(), &post) {
+                                    continue;
+                                }
+                                self.strip_post_h_encodings(&mut h2);
+                                if let Ok((p3, q_gain)) = self.apply_pdu_level_decodings(&h2, p2) {
+                                    let mut consumed: Vec<usize> =
+                                        window.iter().filter_map(|(idx, _, _)| *idx).collect();
+                                    consumed.sort_unstable_by(|a, b| b.cmp(a));
+                                    for idx in consumed {
+                                        self.not_yet_decoded.remove(idx);
+                                    }
+
+                                    let new_quality = outer_q + inner_q + q_gain;
+                                    self.process_pdu(h2, p3, new_quality);
+                                    reclaimed_any = true;
+                                    break;
+                                }
                             }
-                        }
+                            Err(e) => {
+                                log::debug!("unpack failed: {e}");
+                            }
+                        },
                         Err(e) => {
-                            log::debug!("unpack failed: {e}");
-                        }
-                    },
-                    Err(e) => {
-                        if !post.is_empty() {
-                            log::debug!("Phase 2 apply_decodings_multi fail: {e:?}");
+                            if !post.is_empty() {
+                                log::debug!("Phase 2 apply_decodings_multi fail: {e:?}");
+                            }
                         }
                     }
                 }
@@ -399,7 +525,7 @@ impl Deframer {
                 if self.not_yet_decoded.len() >= MAX_NOT_YET_DECODED {
                     self.not_yet_decoded.remove(0);
                 }
-                self.not_yet_decoded.push(b_data);
+                self.not_yet_decoded.push((b_data, current_seq));
             }
             return;
         }
@@ -421,10 +547,21 @@ impl Deframer {
 
         for enc in encs.iter().rev() {
             match enc {
-                ContentEncoding::H | ContentEncoding::Chunk(_) => {
+                ContentEncoding::H => {
                     let mut joined = Vec::new();
                     for b in &current {
                         joined.extend_from_slice(b);
+                    }
+                    current = vec![Bytes::from(joined)];
+                }
+                ContentEncoding::Chunk(size) => {
+                    let mut joined = Vec::new();
+                    for b in &current {
+                        if *size > 0 && b.len() > *size {
+                            joined.extend_from_slice(&b[..*size]);
+                        } else {
+                            joined.extend_from_slice(b);
+                        }
                     }
                     current = vec![Bytes::from(joined)];
                 }
@@ -682,19 +819,29 @@ impl Deframer {
         if let Ok(h) = minicbor::decode::<Header>(payload)
             && let (Some(mid), Some(ce)) = (h.message_id, h.content_encoding)
         {
-            if !self.announcements.contains_key(&(src.clone(), mid))
+            let key = (src, mid);
+            if self.completed_messages.iter().any(|(k, _)| k == &key) {
+                return;
+            }
+            let ice = ce_to_list(&ce);
+            if let Some(entry) = self.announcements.get_mut(&key)
+                && entry.0 == ice
+            {
+                entry.1 = std::time::Instant::now();
+                return;
+            }
+            if !self.announcements.contains_key(&key)
                 && self.announcements.len() >= MAX_ANNOUNCEMENTS
                 && let Some(oldest_key) = self
                     .announcements
                     .iter()
-                    .min_by_key(|(_, (_, t))| *t)
+                    .min_by_key(|(_, (_, t, _))| *t)
                     .map(|(k, _)| k.clone())
             {
                 self.announcements.remove(&oldest_key);
             }
-            let ice = ce_to_list(&ce);
             self.announcements
-                .insert((src, mid), (ice, std::time::Instant::now()));
+                .insert(key, (ice, std::time::Instant::now(), self.rx_seq));
         }
     }
 
@@ -945,6 +1092,8 @@ impl Deframer {
             header: merged,
             payload: data,
         }));
+
+        self.announcements.remove(key);
 
         if self.completed_messages.len() >= MAX_COMPLETED_MESSAGES {
             self.completed_messages.pop_front();

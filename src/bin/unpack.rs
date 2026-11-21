@@ -3,10 +3,44 @@ use chrono::Utc;
 use clap::Parser;
 use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::kiss::KissDecoder;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
+
+/// Atomically creates a unique file in `output_dir`, appending `-1`, `-2`, ...
+/// when multiple messages share the same timestamped basename.
+fn create_unique_output_file(
+    output_dir: &Path,
+    base_name: &str,
+    ext: &str,
+) -> Result<Option<(String, File)>> {
+    for seq in 0u32..10_000 {
+        let filename = if seq == 0 {
+            format!("{base_name}{ext}")
+        } else {
+            format!("{base_name}-{seq}{ext}")
+        };
+        let filepath = output_dir.join(&filename);
+
+        // Ensure filename didn't traverse outside output directory
+        if filepath.parent() != Some(output_dir) {
+            log::warn!("Rejected unsafe output file path: {filepath:?}");
+            return Ok(None);
+        }
+
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&filepath)
+        {
+            Ok(file) => return Ok(Some((filename, file))),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    anyhow::bail!("Could not allocate unique filename for {base_name}{ext} in {output_dir:?}")
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Unpack KISS frames containing HQFBP PDUs.")]
@@ -107,16 +141,13 @@ fn main() -> Result<()> {
                             .unwrap_or_else(|| ".bin".to_string());
 
                         let timestamp = Utc::now().format("%Y-%m-%d-%H%M%S-UTC");
-                        let filename = format!("{timestamp}-{callsign}{ext}");
-                        let filepath = Path::new(&args.output).join(&filename);
-
-                        // Ensure filename didn't traverse outside output directory
-                        if filepath.parent() != Some(Path::new(&args.output)) {
-                            log::warn!("Rejected unsafe output file path: {filepath:?}");
+                        let base_name = format!("{timestamp}-{callsign}");
+                        let Some((filename, mut file)) =
+                            create_unique_output_file(Path::new(&args.output), &base_name, &ext)?
+                        else {
                             continue;
-                        }
+                        };
 
-                        let mut file = File::create(&filepath)?;
                         file.write_all(&me.payload)?;
                         println!("✅ Received {} ({} bytes)", filename, me.payload.len());
                     }
@@ -126,4 +157,51 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_unique_output_file_deduplicates_same_second_burst() {
+        let dir =
+            std::env::temp_dir().join(format!("hqfbp_unpack_unique_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut names = Vec::new();
+        for i in 0..5 {
+            let (name, mut f) =
+                create_unique_output_file(&dir, "2026-11-21-150000-UTC-BURST", ".bin")
+                    .unwrap()
+                    .expect("should create unique file");
+            writeln!(f, "payload-{i}").unwrap();
+            names.push(name);
+        }
+
+        assert_eq!(
+            names,
+            vec![
+                "2026-11-21-150000-UTC-BURST.bin",
+                "2026-11-21-150000-UTC-BURST-1.bin",
+                "2026-11-21-150000-UTC-BURST-2.bin",
+                "2026-11-21-150000-UTC-BURST-3.bin",
+                "2026-11-21-150000-UTC-BURST-4.bin",
+            ]
+        );
+        for (i, name) in names.iter().enumerate() {
+            let content = fs::read_to_string(dir.join(name)).unwrap();
+            assert_eq!(content, format!("payload-{i}\n"));
+        }
+
+        // Unsafe path traversal must be rejected
+        assert!(
+            create_unique_output_file(&dir, "../evil", ".bin")
+                .unwrap()
+                .is_none()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

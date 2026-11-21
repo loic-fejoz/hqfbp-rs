@@ -726,3 +726,335 @@ fn test_ham6_compression_levels() {
         assert_eq!(decomp_br, sample);
     }
 }
+
+#[test]
+fn test_post_h_chunk_rs_chunk_smaller_than_k() {
+    // Reproduces Case 22: post-H chunk(180) followed by rs(240,220) where s < k.
+    // RS zero-pads each 180B chunk to 220B; apply_decodings_multi must truncate
+    // each chunk back to 180B before concatenation.
+    let mut payload = Vec::new();
+    for i in 0..40u32 {
+        let line = format!(
+            "L{i:02}:{:08x}{:08x}|HQFBP\n",
+            i.wrapping_mul(2654435761),
+            i.wrapping_mul(2246822519)
+        );
+        payload.extend_from_slice(line.as_bytes());
+    }
+    payload.truncate(1000);
+
+    let encs = vec![
+        ContentEncoding::Gzip,
+        ContentEncoding::H,
+        ContentEncoding::Chunk(180),
+        ContentEncoding::ReedSolomon(240, 220),
+    ];
+    let ann_encs = vec![
+        ContentEncoding::H,
+        ContentEncoding::Crc32,
+        ContentEncoding::Repeat(2),
+    ];
+    let mut generator = PDUGenerator::new(
+        Some("PHC22".to_string()),
+        None,
+        Some(encs),
+        Some(ann_encs),
+        100,
+    );
+    let pdus = generator.generate(&payload, None).unwrap();
+    assert!(pdus.len() >= 5);
+    for pdu in &pdus {
+        assert!(pdu.len() <= 240, "PDU exceeded 240B: {}", pdu.len());
+    }
+
+    let mut deframer = Deframer::new();
+    for pdu in &pdus {
+        deframer.receive_bytes(pdu);
+    }
+
+    let mut messages = Vec::new();
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            messages.push(me);
+        }
+    }
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload.as_ref(), payload.as_slice());
+}
+
+#[test]
+fn test_post_h_chunk_uncompressed_no_premature_truncation() {
+    // Ensures uncompressed post-H chunked PDUs are not emitted prematurely on chunk 0.
+    let payload: Vec<u8> = (0..400u32).map(|i| ((i * 73 + 19) % 251) as u8).collect();
+    let encs = vec![
+        ContentEncoding::H,
+        ContentEncoding::Chunk(120),
+        ContentEncoding::ReedSolomon(160, 140),
+    ];
+    let ann_encs = vec![
+        ContentEncoding::H,
+        ContentEncoding::Crc32,
+        ContentEncoding::Repeat(2),
+    ];
+    let mut generator = PDUGenerator::new(
+        Some("PHUNC".to_string()),
+        None,
+        Some(encs),
+        Some(ann_encs),
+        1,
+    );
+    let pdus = generator.generate(&payload, None).unwrap();
+    // 2 announcement PDUs + 4 data chunks
+    assert_eq!(pdus.len(), 6);
+
+    let mut deframer = Deframer::new();
+    let mut messages = Vec::new();
+    for (idx, pdu) in pdus.iter().enumerate() {
+        deframer.receive_bytes(pdu);
+        while let Some(ev) = deframer.next_event() {
+            if let Event::Message(me) = ev {
+                assert_eq!(
+                    idx,
+                    pdus.len() - 1,
+                    "Premature MessageEvent emitted at PDU {idx}"
+                );
+                messages.push(me);
+            }
+        }
+    }
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].payload.as_ref(), payload.as_slice());
+}
+
+#[test]
+fn test_consecutive_post_h_chunk_rs_long_lived_deframer() {
+    // Reproduces Step 4.4a: 3 consecutive post-H chunk+RS messages on one Deframer.
+    let mut deframer = Deframer::new();
+    let mut expected = Vec::new();
+
+    for (idx, mid) in [10u32, 20, 30].into_iter().enumerate() {
+        let mut payload = Vec::new();
+        for j in 0..45u32 {
+            let line = format!(
+                "MSG{idx}-LINE{j:02}:{:08x}{:08x}\n",
+                (idx as u32 + 1)
+                    .wrapping_mul(j + 7)
+                    .wrapping_mul(2654435761),
+                j.wrapping_mul(1597334677)
+            );
+            payload.extend_from_slice(line.as_bytes());
+        }
+        payload.truncate(1000);
+
+        let mut generator = PDUGenerator::new(
+            Some(format!("PHC{}", idx + 1)),
+            None,
+            Some(vec![
+                ContentEncoding::Gzip,
+                ContentEncoding::H,
+                ContentEncoding::Chunk(180),
+                ContentEncoding::ReedSolomon(240, 220),
+            ]),
+            Some(vec![
+                ContentEncoding::H,
+                ContentEncoding::Crc32,
+                ContentEncoding::Repeat(2),
+            ]),
+            mid,
+        );
+        let pdus = generator.generate(&payload, None).unwrap();
+        for pdu in &pdus {
+            deframer.receive_bytes(pdu);
+        }
+        expected.push(payload);
+    }
+
+    let mut actual = Vec::new();
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            actual.push(me.payload.to_vec());
+        }
+    }
+    assert_eq!(actual.len(), 3);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn test_consecutive_post_h_raptorq_with_trailing_repairs_no_corruption() {
+    // Reproduces Step 4.4b: consecutive post-H RaptorQ messages with all trailing
+    // repair symbols delivered, across both same and distinct callsigns.
+    let mut deframer = Deframer::new();
+    let specs = [
+        ("F4TEST", 10u32, 11u8),
+        ("F4TEST", 30u32, 37u8),
+        ("F4OTHER", 50u32, 83u8),
+    ];
+
+    let mut expected = Vec::new();
+    for (call, mid, seed) in specs {
+        let payload: Vec<u8> = (0..400u32)
+            .map(|i| ((i.wrapping_mul(seed as u32) + seed as u32) % 251) as u8)
+            .collect();
+        let mut generator = PDUGenerator::new(
+            Some(call.to_string()),
+            None,
+            Some(vec![
+                ContentEncoding::H,
+                ContentEncoding::RaptorQDynamic(180, 5),
+                ContentEncoding::Crc32,
+            ]),
+            Some(vec![
+                ContentEncoding::H,
+                ContentEncoding::Crc32,
+                ContentEncoding::Repeat(2),
+            ]),
+            mid,
+        );
+        let pdus = generator.generate(&payload, None).unwrap();
+        for pdu in &pdus {
+            deframer.receive_bytes(pdu);
+        }
+        expected.push((call.to_string(), payload));
+    }
+
+    let mut actual = Vec::new();
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            actual.push((
+                me.header.src_callsign.unwrap_or_default(),
+                me.payload.to_vec(),
+            ));
+        }
+    }
+    assert_eq!(actual.len(), 3);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn test_post_h_combiner_survives_prior_hostile_garbage() {
+    let mut deframer = Deframer::new();
+
+    // Feed 15 hostile/garbage packets beforehand
+    for i in 0..15u8 {
+        let garbage: Vec<u8> = (0..180u8)
+            .map(|j| i.wrapping_mul(31).wrapping_add(j))
+            .collect();
+        deframer.receive_bytes(&garbage);
+    }
+
+    let payload1: Vec<u8> = (0..900u32)
+        .map(|i| ((i * 59 + i / 7) % 251) as u8)
+        .collect();
+    let mut gen1 = PDUGenerator::new(
+        Some("SURV1".to_string()),
+        None,
+        Some(vec![
+            ContentEncoding::Gzip,
+            ContentEncoding::H,
+            ContentEncoding::Chunk(180),
+            ContentEncoding::ReedSolomon(240, 220),
+        ]),
+        Some(vec![
+            ContentEncoding::H,
+            ContentEncoding::Crc32,
+            ContentEncoding::Repeat(2),
+        ]),
+        1,
+    );
+    for pdu in gen1.generate(&payload1, None).unwrap() {
+        deframer.receive_bytes(&pdu);
+    }
+
+    let payload2: Vec<u8> = (0..400u32).map(|i| ((i * 43 + 5) % 251) as u8).collect();
+    let mut gen2 = PDUGenerator::new(
+        Some("SURV2".to_string()),
+        None,
+        Some(vec![
+            ContentEncoding::H,
+            ContentEncoding::RaptorQDynamic(180, 5),
+            ContentEncoding::Crc32,
+        ]),
+        Some(vec![
+            ContentEncoding::H,
+            ContentEncoding::Crc32,
+            ContentEncoding::Repeat(2),
+        ]),
+        10,
+    );
+    for pdu in gen2.generate(&payload2, None).unwrap() {
+        deframer.receive_bytes(&pdu);
+    }
+
+    let mut actual = Vec::new();
+    while let Some(ev) = deframer.next_event() {
+        if let Event::Message(me) = ev {
+            actual.push(me.payload.to_vec());
+        }
+    }
+    assert_eq!(actual, vec![payload1, payload2]);
+}
+
+#[test]
+fn test_unpack_cli_same_second_burst_no_overwrite() {
+    use hqfbp_rs::MediaType;
+    use hqfbp_rs::kiss::encode_kiss_frame;
+    use std::process::Command;
+
+    let tmp_root =
+        std::env::temp_dir().join(format!("hqfbp_regression_burst_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    let out_dir = tmp_root.join("out");
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let kiss_path = tmp_root.join("burst5.kiss");
+
+    let mut generator = PDUGenerator::new(
+        Some("BURST5".to_string()),
+        None,
+        Some(vec![ContentEncoding::H, ContentEncoding::Crc32]),
+        None,
+        100,
+    );
+
+    let mut kiss_bytes = Vec::new();
+    let mut expected_payloads = Vec::new();
+    for i in 0..5u8 {
+        let payload = format!("BURST_PAYLOAD_{i}_DATA_{}", i * 17).into_bytes();
+        let pdus = generator
+            .generate(
+                &payload,
+                Some(MediaType::Type("application/octet-stream".to_string())),
+            )
+            .unwrap();
+        for pdu in pdus {
+            kiss_bytes.extend_from_slice(&encode_kiss_frame(&pdu));
+        }
+        expected_payloads.push(payload);
+    }
+    std::fs::write(&kiss_path, &kiss_bytes).unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_unpack"))
+        .arg(&out_dir)
+        .arg("--input")
+        .arg(&kiss_path)
+        .status()
+        .expect("failed to execute unpack binary");
+    assert!(status.success());
+
+    let mut actual_payloads = Vec::new();
+    for entry in std::fs::read_dir(&out_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            actual_payloads.push(std::fs::read(path).unwrap());
+        }
+    }
+    assert_eq!(
+        actual_payloads.len(),
+        5,
+        "All 5 burst messages must be saved without overwriting same-second files"
+    );
+    expected_payloads.sort();
+    actual_payloads.sort();
+    assert_eq!(actual_payloads, expected_payloads);
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
