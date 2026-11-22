@@ -10,7 +10,7 @@ PY_PACK = src/hqfbp/pack.py
 PY_UNPACK = src/hqfbp/unpack.py
 PYTHON_UV = cd ../py-hqfbp && uv run python3
 
-.PHONY: all clean test-tcp-rust test-tcp-py test-cross-tcp test-py-bench
+.PHONY: all clean test-tcp-rust test-tcp-py test-cross-tcp test-py-bench security
 
 all: test-tcp-rust test-tcp-py test-cross-tcp test-py-bench
 
@@ -112,3 +112,9 @@ simulate-lt-post:
 		--verbose \
 	    --encodings "lt(dlen,156,30),h,rs(255,223)" \
 	    --ann-encodings "h,crc32,repeat(3)"
+
+security:
+	cargo deny check
+	cargo deny --manifest-path fuzz/Cargo.toml check advisories bans sources
+	cargo audit --deny warnings
+	cargo audit --file fuzz/Cargo.lock --deny warnings

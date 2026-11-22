@@ -1,7 +1,8 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use hqfbp_rs::deframer::Deframer;
 use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::unpack;
+use std::hint::black_box;
 
 fn bench_unpack(c: &mut Criterion) {
     let mut generator = PDUGenerator::new(Some("BENCH".to_string()), None, None, None, 1);

@@ -3,7 +3,7 @@ use clap::{Parser, ValueEnum};
 use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::generator::PDUGenerator;
 use hqfbp_rs::parse_encodings;
-use rand::{Rng, RngCore};
+use rand::{Rng, RngExt};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "HQFBP Simulation Engine")]
@@ -62,12 +62,12 @@ impl BitErrorChannel {
             return (data.to_vec(), 0);
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut ba = data.to_vec();
         let mut errors = 0;
         for byte in ba.iter_mut() {
             for bit in 0..8 {
-                if rng.gen_bool(self.ber) {
+                if rng.random_bool(self.ber) {
                     *byte ^= 1 << bit;
                     errors += 1;
                 }
@@ -260,7 +260,7 @@ fn main() -> Result<()> {
     let channel = BitErrorChannel::new(args.ber);
     let mut metrics = SimulationMetrics::new();
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut source_data = vec![0u8; args.file_size];
     rng.fill_bytes(&mut source_data);
 
@@ -308,7 +308,7 @@ fn main() -> Result<()> {
 
         for (clean_pdu, expected_payload) in clean_pdus_info.iter() {
             // Check for packet erasure (loss)
-            if args.loss > 0.0 && rand::thread_rng().gen_bool(args.loss.min(1.0)) {
+            if args.loss > 0.0 && rand::rng().random_bool(args.loss.min(1.0)) {
                 metrics.add_pdu(clean_pdu, true, 0);
                 continue;
             }

@@ -1,0 +1,39 @@
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.8
+private = { ignore = true }
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "BlueOak-1.0.0",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+deny = [
+    { crate = "humantime", reason = "Unmaintained (RUSTSEC-2026-0542); env_logger migrated away" },
+    { crate = "chrono", reason = "Unmaintained (RUSTSEC-2026-0543); migrated to time" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,6 +1,6 @@
 use hqfbp_rs::codec::{rs_decode, rs_encode};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 fn test_rs_power(n: usize, k: usize, ber: f64, iterations: usize) -> f64 {
     let mut successes = 0;
@@ -18,7 +18,7 @@ fn test_rs_power(n: usize, k: usize, ber: f64, iterations: usize) -> f64 {
         let mut noisy = encoded.clone();
         for byte in noisy.iter_mut() {
             for bit in 0..8 {
-                if rng.gen_bool(ber) {
+                if rng.random_bool(ber) {
                     *byte ^= 1 << bit;
                 }
             }

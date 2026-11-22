@@ -8,6 +8,7 @@ To provide a high-performance, robust Rust implementation of the **Hamradio Quic
 - **Test:** `cargo test` (Run this ALWAYS before submitting changes)
 - **Check/Lint:** `cargo clippy`
 - **Format:** `cargo fmt`
+- **Security Audit:** `cargo deny check && cargo audit --deny warnings`
 - **Output Control:** Use `-v` or `--verbose` with any binary to enable `DEBUG` logs.
 
 ## Output Standards

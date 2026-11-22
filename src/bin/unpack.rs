@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use chrono::Utc;
 use clap::Parser;
 use hqfbp_rs::deframer::{Deframer, Event};
 use hqfbp_rs::kiss::KissDecoder;
@@ -7,6 +6,19 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
+use time::OffsetDateTime;
+
+fn format_utc_timestamp(dt: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}-{:02}{:02}{:02}-UTC",
+        dt.year(),
+        u8::from(dt.month()),
+        dt.day(),
+        dt.hour(),
+        dt.minute(),
+        dt.second(),
+    )
+}
 
 /// Atomically creates a unique file in `output_dir`, appending `-1`, `-2`, ...
 /// when multiple messages share the same timestamped basename.
@@ -140,7 +152,7 @@ fn main() -> Result<()> {
                             .map(|e| format!(".{e}"))
                             .unwrap_or_else(|| ".bin".to_string());
 
-                        let timestamp = Utc::now().format("%Y-%m-%d-%H%M%S-UTC");
+                        let timestamp = format_utc_timestamp(OffsetDateTime::now_utc());
                         let base_name = format!("{timestamp}-{callsign}");
                         let Some((filename, mut file)) =
                             create_unique_output_file(Path::new(&args.output), &base_name, &ext)?
@@ -203,5 +215,15 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_format_utc_timestamp() {
+        let epoch = OffsetDateTime::from_unix_timestamp(0).unwrap();
+        assert_eq!(format_utc_timestamp(epoch), "1970-01-01-000000-UTC");
+
+        // 2026-03-05 04:07:09 UTC = 1772683629
+        let dt = OffsetDateTime::from_unix_timestamp(1_772_683_629).unwrap();
+        assert_eq!(format_utc_timestamp(dt), "2026-03-05-040709-UTC");
     }
 }

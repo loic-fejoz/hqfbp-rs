@@ -116,3 +116,21 @@ jobs:
           name: mutants-out
           path: mutants.out/
           if-no-files-found: ignore
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-deny and cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      - name: Run cargo-deny
+        run: |
+          cargo deny check
+          cargo deny --manifest-path fuzz/Cargo.toml check advisories bans sources
+      - name: Run cargo-audit
+        run: |
+          cargo audit --deny warnings
+          cargo audit --file fuzz/Cargo.lock --deny warnings

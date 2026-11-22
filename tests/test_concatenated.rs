@@ -32,8 +32,8 @@ mod tests {
 
         let mut deframer = Deframer::new();
         let mut recovered_data = None;
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+        use rand::RngExt;
+        let mut rng = rand::rng();
         let ber = 0.0001;
         let mut count_received = 0;
         let mut count_accepted = 0;
@@ -45,7 +45,7 @@ mod tests {
             let mut noisy_pdu = pdu.to_vec();
             for byte in noisy_pdu.iter_mut() {
                 for bit in 0..8 {
-                    if rng.gen_bool(ber) {
+                    if rng.random_bool(ber) {
                         *byte ^= 1 << bit;
                     }
                 }

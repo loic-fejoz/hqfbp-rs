@@ -10,31 +10,29 @@ repository = "https://github.com/loic-fejoz/hqfbp-rs"
 keywords = ["hamradio", "broadcast", "fec", "cbor", "kiss"]
 
 [dependencies]
-minicbor = { version = "0.26", features = ["derive", "alloc"] }
-serde = { version = "1.0", features = ["derive"] }
+minicbor = { version = "2.3", features = ["derive", "alloc"] }
 serde_json = "1.0"
 reed-solomon = "0.2"
-raptorq = "1.8"
+raptorq = "2.0"
 flate2 = "1.0"
-brotli = "7.0"
+brotli = "9.1"
 lzma-rs = "0.3"
 crc = "3.2"
 regex = "1.11"
 anyhow = "1.0"
 hex = "0.4"
-bitvec = "1.0"
 clap = { version = "4.5", features = ["derive"] }
-rand = "0.8"
+rand = "0.10"
 csv = "1.3"
 mime_guess = "2.0"
-chrono = "0.4"
+time = "0.3"
 bytes = "1.9"
 log = "0.4"
-env_logger = "0.11"
+env_logger = { version = "0.11", default-features = false, features = ["auto-color", "regex"] }
 
 [dev-dependencies]
 proptest = "1.6"
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "bench_hqfbp"
